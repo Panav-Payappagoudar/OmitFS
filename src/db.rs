@@ -63,13 +63,16 @@ impl OmitDb {
     }
 
     pub async fn search(&self, query_vector: Vec<f32>, limit: usize) -> Result<Vec<(String, String)>> {
+        // Query more vectors internally to ensure we have enough after deduplication of chunks
         let mut results = self.table
             .search(&query_vector)
-            .limit(limit)
+            .limit(limit * 5)
             .execute()
             .await?;
         
+        let mut unique_paths = std::collections::HashSet::new();
         let mut found_files = Vec::new();
+        
         while let Some(batch) = results.next().await {
             let batch = batch?;
             let filename_col = batch.column_by_name("filename").context("Missing filename")?;
@@ -79,10 +82,18 @@ impl OmitDb {
             let paths = path_col.as_any().downcast_ref::<StringArray>().context("Invalid path type")?;
             
             for i in 0..batch.num_rows() {
-                found_files.push((
-                    filenames.value(i).to_string(),
-                    paths.value(i).to_string()
-                ));
+                let physical_path = paths.value(i).to_string();
+                if !unique_paths.contains(&physical_path) {
+                    unique_paths.insert(physical_path.clone());
+                    found_files.push((
+                        filenames.value(i).to_string(),
+                        physical_path
+                    ));
+                    
+                    if found_files.len() >= limit {
+                        return Ok(found_files);
+                    }
+                }
             }
         }
         

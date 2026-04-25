@@ -99,29 +99,61 @@ async fn main() -> Result<()> {
                 if event.kind.is_create() || event.kind.is_modify() {
                     for path in event.paths {
                         if path.is_file() {
-                            let text = match std::fs::read_to_string(&path) {
-                                Ok(t) => t,
-                                Err(e) => {
-                                    error!("Failed to read {:?}: {}", path, e);
-                                    continue;
+                            let text = if path.extension().and_then(|s| s.to_str()) == Some("pdf") {
+                                match pdf_extract::extract_text(&path) {
+                                    Ok(t) => t,
+                                    Err(e) => {
+                                        error!("Failed to extract PDF {:?}: {}", path, e);
+                                        continue;
+                                    }
+                                }
+                            } else {
+                                match std::fs::read_to_string(&path) {
+                                    Ok(t) => t,
+                                    Err(e) => {
+                                        error!("Failed to read text {:?}: {}", path, e);
+                                        continue;
+                                    }
                                 }
                             };
                             
-                            let mut eng = engine.lock().unwrap();
-                            match eng.embed(&text) {
-                                Ok(vector) => {
-                                    let filename = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-                                    let id = uuid::Uuid::new_v4().to_string();
-                                    let phys_path = path.to_string_lossy().to_string();
-                                    
-                                    if let Err(e) = db.insert_file(&id, &filename, &phys_path, vector).await {
-                                        error!("Failed to insert to LanceDB: {}", e);
-                                    } else {
-                                        info!("Ingested {:?}", path);
-                                    }
-                                }
-                                Err(e) => error!("Embedding failed for {:?}: {}", path, e),
+                            if text.trim().is_empty() { continue; }
+                            
+                            // Semantic Chunking: Split into overlapping ~200 word chunks
+                            let words: Vec<&str> = text.split_whitespace().collect();
+                            let chunk_size = 200;
+                            let overlap = 50;
+                            let step = if chunk_size > overlap { chunk_size - overlap } else { chunk_size };
+                            
+                            let mut chunks = Vec::new();
+                            let mut i = 0;
+                            while i < words.len() {
+                                let end = std::cmp::min(i + chunk_size, words.len());
+                                chunks.push(words[i..end].join(" "));
+                                if end == words.len() { break; }
+                                i += step;
                             }
+
+                            let filename = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                            let phys_path = path.to_string_lossy().to_string();
+
+                            let mut eng = engine.lock().unwrap();
+                            let mut success_count = 0;
+                            
+                            for chunk in chunks {
+                                match eng.embed(&chunk) {
+                                    Ok(vector) => {
+                                        let id = uuid::Uuid::new_v4().to_string();
+                                        if let Err(e) = db.insert_file(&id, &filename, &phys_path, vector).await {
+                                            error!("Failed to insert chunk to LanceDB: {}", e);
+                                        } else {
+                                            success_count += 1;
+                                        }
+                                    }
+                                    Err(e) => error!("Embedding failed for chunk in {:?}: {}", path, e),
+                                }
+                            }
+                            info!("Ingested {:?} into {} semantic chunks", path, success_count);
                         }
                     }
                 }

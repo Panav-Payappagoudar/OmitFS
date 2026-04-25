@@ -27,6 +27,9 @@ arrow-array = "51.0"
 arrow-schema = "51.0"
 uuid = { version = "1.8", features = ["v4"] }
 
+# Document Parsing
+pdf-extract = "0.7"
+
 # AI / ML Embeddings
 candle-core = "0.4"
 candle-transformers = "0.4"
