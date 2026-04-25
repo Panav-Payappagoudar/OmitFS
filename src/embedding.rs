@@ -4,6 +4,7 @@ use candle_nn::VarBuilder;
 use candle_transformers::models::bert::{BertModel, Config, DTYPE};
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
+use candle_core::IndexOp;
 
 pub struct EmbeddingEngine {
     model: BertModel,
