@@ -1,96 +1,102 @@
 <div align="center">
 
-# 🧠 OmitFS
-**Semantic File Routing for the Modern Operating System**
+# 🌌 OmitFS
+**Intent-Driven Semantic File Routing for the Modern Operating System**
 
-[![Rust](https://img.shields.io/badge/rust-1.75%2B-blue.svg?style=for-the-badge&logo=rust)](https://www.rust-lang.org)
-[![FUSE](https://img.shields.io/badge/fuse-kernel-darkgreen.svg?style=for-the-badge&logo=linux)](https://github.com/libfuse/libfuse)
-[![LanceDB](https://img.shields.io/badge/LanceDB-Vector-orange.svg?style=for-the-badge)](https://lancedb.com/)
-[![Candle](https://img.shields.io/badge/Candle-ML-red.svg?style=for-the-badge)](https://github.com/huggingface/candle)
+[![Rust](https://img.shields.io/badge/Rust-Bare_Metal-blue?style=for-the-badge&logo=rust)](https://www.rust-lang.org)
+[![FUSE](https://img.shields.io/badge/FUSE-Kernel_Bridge-darkgreen?style=for-the-badge&logo=linux)](https://github.com/libfuse/libfuse)
+[![LanceDB](https://img.shields.io/badge/LanceDB-Vector_Storage-orange?style=for-the-badge)](https://lancedb.com/)
+[![Candle](https://img.shields.io/badge/Candle-Local_SLM-red?style=for-the-badge)](https://github.com/huggingface/candle)
 
-OmitFS is a high-performance, zero-dependency semantic file system built in **bare-metal Rust**. It annihilates the traditional hierarchical directory tree, replacing it with a dynamic, LLM-powered latent space. Navigate your local files by **intent** rather than rigid paths.
+*OmitFS obliterates the 50-year-old paradigm of hierarchical directory trees. It replaces rigid folders with a high-dimensional, LLM-powered latent space directly inside your OS kernel.*
 
 </div>
 
 ---
 
-## 🚀 How It Works
+## 📖 The Narrative: Why OmitFS Exists
 
-1. **The Hidden Void:** Standard directories are obsolete. Your files are ingested into a flat, hidden storage layer (`~/.omitfs_data/raw`).
-2. **Local SLM Embedding:** As files are added, an embedded Small Language Model (`all-MiniLM-L6-v2`) instantly tokenizes and mathematically embeds the content into 384-dimensional vectors via Hugging Face's Rust-native **Candle** engine. Zero network calls. Zero OpenAI APIs. 100% private.
-3. **Dynamic Hallucination:** When you execute a standard terminal command (e.g., `cd "tax documents from 2024"`), the FUSE kernel driver intercepts the POSIX call. The query is instantly vectorized and matched against the embedded **LanceDB** vector store using cosine similarity.
-4. **Virtual Materialization:** OmitFS instantaneously hallucinates a virtual directory in RAM containing the exact files you meant to look for, materialized as real POSIX inodes.
+**The year is 1964.** The hierarchical directory tree is introduced in the MULTICS operating system. It was a brilliant solution for organizing small clusters of files. 
 
----
+**The year is 2026.** We are still using the exact same structure. We force human brains to memorize arbitrary file paths, obscure folder names, and rigid organizational systems just to find a single document. *The hierarchy is broken.*
 
-## 🛠️ Tech Stack & Architecture
-
-- **Core Language:** Rust 2021 Edition
-- **Kernel Bridge:** `fuser` (Filesystem in Userspace)
-- **AI Engine:** `candle-core` & `candle-transformers` (Local ML inference)
-- **Vector Database:** Embedded `LanceDB` with `arrow-array`
-- **File Ingestion:** `notify` (Asynchronous recursive background watching)
-- **Asynchronous Runtime:** `tokio`
-- **CLI & Diagnostics:** `clap`, `tracing`, `anyhow`
+**Enter OmitFS.** 
+OmitFS is a paradigm-shifting, zero-dependency semantic file system. It abandons rigid paths entirely. Instead of forcing you to memorize where you put a file, **you simply tell the operating system what you want.** The physical hard drive acts as a flat, hidden void, and directories are hallucinated in real-time based purely on your semantic intent.
 
 ---
 
-## ⚡ Quick Start
+## ⚙️ The Core Mechanics
+
+1. **The Hidden Void**: Standard directories no longer exist. All files are ingested into a single, flat, hidden physical directory. 
+2. **Semantic Embedding**: As a file is dropped into the void, its contents are read and converted into 384-dimensional mathematical vectors using a local Small Language Model. These vectors represent the *meaning* of the file.
+3. **Dynamic Hallucination**: When you type a command like `cd "decentralized web3 auth architecture"`, OmitFS intercepts the kernel call, mathematically embeds your prompt, and instantly generates a virtual folder in RAM containing the exact relevant files.
+4. **Ephemeral Existence**: The folder only exists for as long as you are standing inside it. Once you leave, the structure dissolves back into the void.
+
+---
+
+## 🏗️ Technical Architecture & Constraints
+
+OmitFS is not a fragile Python wrapper or a bloated Electron app. It is a production-grade infrastructure tool that operates beneath the application layer, interfacing directly with the OS kernel. It adheres to absolute brutalist engineering principles:
+
+- 🦀 **Language**: Pure Rust. Chosen for bare-metal speed, sub-millisecond execution, and uncompromising memory safety.
+- 🌉 **The OS Bridge (`fuser`)**: A custom Filesystem in Userspace (FUSE) driver that seamlessly intercepts standard POSIX system calls (`cd`, `ls`, `cat`, `vim`) directly from the Linux/macOS kernel.
+- 🧠 **The Inference Engine (`candle`)**: Runs a quantized Hugging Face SLM (`all-MiniLM-L6-v2`) 100% locally on the CPU. It translates text payloads into mathematical vectors with zero network latency.
+- 🗄️ **The Vector Database (`LanceDB`)**: An embedded vector search engine running natively inside the Rust process to execute hyper-fast cosine similarity searches.
+- 🛡️ **Absolute Privacy (Air-Gapped)**: Zero external dependencies. No background Docker containers. No Python environments. No data is ever sent to OpenAI or the cloud. **100% offline.**
+- 📁 **Flawless POSIX Compliance**: The virtual files generated feed accurate byte-sizes, permissions (`-rw-r--r--`), and modification timestamps back to the OS. Standard tools like `grep` and `cat` work flawlessly.
+
+---
+
+## ⚡ Quick Start & Usage
+
+The interface is pure, brutalist terminal interaction. There are no web dashboards or graphical overlays.
 
 ### 1. Prerequisites
-You will need Rust and a FUSE-compatible OS (Linux/macOS). 
+You will need Rust and a FUSE-compatible OS (Linux or macOS / WSL2 for Windows).
 ```bash
-# Install Rust
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
 # Install FUSE dependencies (Ubuntu/Debian)
 sudo apt install libfuse-dev
 ```
 
-### 2. Build from Source
-Clone the repository and compile the highly optimized release binary:
+### 2. Compile the System
+Clone the repository and compile the hyper-fast release binary:
 ```bash
 git clone https://github.com/Panav-Payappagoudar/OmitFS.git
 cd OmitFS
 cargo build --release
 ```
 
-### 3. Initialize & Start the Daemon
-Initialize the hidden storage layer and local Vector DB, then start the background ingestion pipeline:
+### 3. Initialize & Mount the Void
+Initialize the system, start the background SLM ingestion daemon, and mount the file system to your OS:
 ```bash
-# Initialize database and model weights
+# Initialize the hidden void and Vector DB
 ./target/release/omitfs init
 
-# Start the background daemon (Leave this running)
+# Start the background daemon (Run in a separate terminal)
 ./target/release/omitfs daemon
-```
 
-### 4. Mount the Matrix
-In a new terminal, create a mount point and attach OmitFS:
-```bash
+# Mount the FUSE driver
 mkdir -p ~/OmitFS_Mount
 ./target/release/omitfs mount ~/OmitFS_Mount
 ```
 
-### 5. Navigate by Meaning
-Drop raw text/code files into `~/.omitfs_data/raw`. Then simply `cd` into concepts:
-```bash
-# Instead of traversing folders, type your intent:
-cd "~/OmitFS_Mount/project architecture and deep learning notes"
+### 4. Navigate by Meaning
+Drop raw text/code files into `~/.omitfs_data/raw`. Then, navigate your computer using raw human intent:
 
-# The OS sees a valid directory. The files inside are exactly what you asked for.
+```bash
+# The OS queries your semantic intent
+cd "~/OmitFS_Mount/tax documents from 2024"
+
+# The terminal reveals the exact relevant files
 ls -la
+
+# Interact with the virtual file using standard POSIX tools
+cat 2024_W2_form.md
+vim Q3_expenses.txt
 ```
 
 ---
 
-## 🧠 System Constraints & Safety
-
-- **100% Local Execution:** Model weights are pulled directly from Hugging Face once and cached locally. No telemetry, no external database pings.
-- **Graceful Degradation:** If the vector search fails or yields low confidence, OmitFS elegantly falls back to standard POSIX `ENOENT` (No such file or directory) to prevent kernel panics.
-- **Zero-Dependency:** The final compiled binary contains everything needed to run: the database, the machine learning inference engine, and the filesystem driver.
-
----
-
-## 📜 License
-MIT License. Built for the modern OS.
+<div align="center">
+<i>Built for the future of the Operating System.</i>
+</div>
