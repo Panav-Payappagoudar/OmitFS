@@ -5,16 +5,19 @@ pub mod watcher;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use std::io::Write; // needed for print! + flush
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
-use tracing::{info, Level, error};
+use tracing::{error, info, Level};
 
 use db::OmitDb;
 use embedding::EmbeddingEngine;
 use fuse::OmitFs;
 
-/// OmitFS: Zero-dependency semantic file system
+// ─── CLI Definition ────────────────────────────────────────────────────────────
+
+/// OmitFS — Intent-driven semantic file system
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
@@ -24,245 +27,290 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Initializes the hidden storage folder and LanceDB database
+    /// Create ~/.omitfs_data, init LanceDB, download SLM weights
     Init,
-    /// Starts the background file watcher and ingestion pipeline
+
+    /// Run background ingestion daemon (watch raw/ and embed new files)
     Daemon,
-    /// Mounts the FUSE virtual file system to the specified directory
+
+    /// Mount the FUSE semantic filesystem at <mount_point>
     Mount {
-        /// The mount point directory
+        /// Directory to mount (must already exist)
         mount_point: PathBuf,
     },
-    /// Interactive file manager: search, open, copy, move, delete
+
+    /// Interactive semantic file manager: search → open / copy / move / delete
     Select {
-        /// Natural language query (e.g. "my calculus notes")
+        /// Natural-language query, e.g. "my calculus notes"
         query: String,
     },
 }
 
-fn setup_logging() -> Result<tracing_appender::non_blocking::WorkerGuard> {
-    let data_dir = dirs::home_dir()
-        .context("Could not find home directory")?
-        .join(".omitfs_data");
+// ─── Logging ──────────────────────────────────────────────────────────────────
 
-    if !data_dir.exists() {
-        std::fs::create_dir_all(&data_dir)?;
-    }
-
-    let file_appender = tracing_appender::rolling::daily(data_dir, "omitfs.log");
-    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
-
+fn setup_logging(data_dir: &std::path::Path) -> Result<tracing_appender::non_blocking::WorkerGuard> {
+    let appender = tracing_appender::rolling::daily(data_dir, "omitfs.log");
+    let (nb, guard) = tracing_appender::non_blocking(appender);
     tracing_subscriber::fmt()
         .with_max_level(Level::INFO)
-        .with_writer(non_blocking)
+        .with_writer(nb)
         .with_ansi(false)
         .init();
-
     Ok(guard)
 }
+
+// ─── Ingestion helpers ────────────────────────────────────────────────────────
+
+/// Extract raw text from a file. PDFs use pdf-extract; everything else is UTF-8.
+fn extract_text(path: &std::path::Path) -> Option<String> {
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+    match ext.as_str() {
+        "pdf" => {
+            match pdf_extract::extract_text(path) {
+                Ok(t) if !t.trim().is_empty() => Some(t),
+                Ok(_) => { info!("PDF {:?} yielded no text, skipping", path); None }
+                Err(e) => { error!("PDF extract {:?}: {}", path, e); None }
+            }
+        }
+        _ => {
+            match std::fs::read_to_string(path) {
+                Ok(t) if !t.trim().is_empty() => Some(t),
+                Ok(_) => None,
+                Err(e) => { error!("Read {:?}: {}", path, e); None }
+            }
+        }
+    }
+}
+
+/// Chunk text into overlapping 200-word windows (50-word stride).
+fn chunk_text(text: &str) -> Vec<String> {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    if words.is_empty() { return vec![]; }
+
+    const CHUNK:   usize = 200;
+    const OVERLAP: usize = 50;
+    const STEP:    usize = CHUNK - OVERLAP;
+
+    let mut chunks = Vec::new();
+    let mut i = 0;
+    while i < words.len() {
+        let end = (i + CHUNK).min(words.len());
+        chunks.push(words[i..end].join(" "));
+        if end == words.len() { break; }
+        i += STEP;
+    }
+    chunks
+}
+
+// ─── Main ────────────────────────────────────────────────────────────────────
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    let _log_guard = setup_logging().context("Failed to initialize logging")?;
 
-    let data_dir = dirs::home_dir().unwrap().join(".omitfs_data");
+    let data_dir = dirs::home_dir()
+        .context("Cannot determine home directory")?
+        .join(".omitfs_data");
+
     let raw_dir = data_dir.join("raw");
 
+    // Ensure at minimum data_dir exists before logging starts
+    if !data_dir.exists() {
+        std::fs::create_dir_all(&data_dir)
+            .context("Failed to create ~/.omitfs_data")?;
+    }
+
+    let _log_guard = setup_logging(&data_dir)?;
+
     match cli.command {
+        // ── init ─────────────────────────────────────────────────────────────
         Commands::Init => {
-            info!("Initializing OmitFS infrastructure");
+            info!("omitfs init");
             if !raw_dir.exists() {
-                std::fs::create_dir_all(&raw_dir).context("Failed to create raw directory")?;
+                std::fs::create_dir_all(&raw_dir)
+                    .context("Failed to create raw dir")?;
             }
-            
+
             let db_path = data_dir.join("lancedb");
-            let _db = OmitDb::init(db_path.clone()).await?;
-            
-            // Warm up / download the model
-            info!("Downloading/Warming up Embedding Engine...");
-            let _engine = EmbeddingEngine::new()?;
-            
-            println!("OmitFS initialized successfully at {:?}", data_dir);
+            let _db = OmitDb::init(db_path).await?;
+
+            println!("Downloading SLM weights (one-time, ~80 MB)...");
+            let _engine = EmbeddingEngine::new()
+                .context("Failed to initialize embedding engine")?;
+
+            println!("✅  OmitFS initialized at {:?}", data_dir);
+            println!("    Drop files into: {:?}", raw_dir);
         }
+
+        // ── daemon ────────────────────────────────────────────────────────────
         Commands::Daemon => {
-            info!("Starting OmitFS background daemon");
-            println!("OmitFS daemon running. Watching for files...");
-            
+            info!("omitfs daemon starting");
+            println!("🛰  OmitFS daemon watching {:?}", raw_dir);
+
+            if !raw_dir.exists() {
+                std::fs::create_dir_all(&raw_dir)
+                    .context("raw dir missing — run `omitfs init` first")?;
+            }
+
             let db_path = data_dir.join("lancedb");
-            let db = Arc::new(OmitDb::init(db_path).await?);
-            let engine = Arc::new(Mutex::new(EmbeddingEngine::new()?));
+            let db      = Arc::new(OmitDb::init(db_path).await?);
+            let engine  = Arc::new(Mutex::new(EmbeddingEngine::new()?));
 
             let (tx, mut rx) = mpsc::unbounded_channel();
+            // Keep watcher alive for the duration of the daemon
             let _watcher = watcher::start_watcher(&raw_dir, tx)?;
 
-            // Background ingestion pipeline
             while let Some(event) = rx.recv().await {
-                info!("File event detected: {:?}", event);
-                
-                // Demo ingestion logic for new files
-                if event.kind.is_create() || event.kind.is_modify() {
-                    for path in event.paths {
-                        if path.is_file() {
-                            let text = if path.extension().and_then(|s| s.to_str()) == Some("pdf") {
-                                match pdf_extract::extract_text(&path) {
-                                    Ok(t) => t,
-                                    Err(e) => {
-                                        error!("Failed to extract PDF {:?}: {}", path, e);
-                                        continue;
-                                    }
-                                }
-                            } else {
-                                match std::fs::read_to_string(&path) {
-                                    Ok(t) => t,
-                                    Err(e) => {
-                                        error!("Failed to read text {:?}: {}", path, e);
-                                        continue;
-                                    }
-                                }
-                            };
-                            
-                            if text.trim().is_empty() { continue; }
-                            
-                            // Semantic Chunking: Split into overlapping ~200 word chunks
-                            let words: Vec<&str> = text.split_whitespace().collect();
-                            let chunk_size = 200;
-                            let overlap = 50;
-                            let step = if chunk_size > overlap { chunk_size - overlap } else { chunk_size };
-                            
-                            let mut chunks = Vec::new();
-                            let mut i = 0;
-                            while i < words.len() {
-                                let end = std::cmp::min(i + chunk_size, words.len());
-                                chunks.push(words[i..end].join(" "));
-                                if end == words.len() { break; }
-                                i += step;
-                            }
+                if !event.kind.is_create() && !event.kind.is_modify() {
+                    continue;
+                }
+                for path in event.paths {
+                    if !path.is_file() { continue; }
 
-                            let filename = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-                            let phys_path = path.to_string_lossy().to_string();
+                    let Some(text) = extract_text(&path) else { continue; };
+                    let chunks = chunk_text(&text);
 
-                            let mut eng = engine.lock().unwrap();
-                            let mut success_count = 0;
-                            
-                            for chunk in chunks {
-                                match eng.embed(&chunk) {
-                                    Ok(vector) => {
-                                        let id = uuid::Uuid::new_v4().to_string();
-                                        if let Err(e) = db.insert_file(&id, &filename, &phys_path, vector).await {
-                                            error!("Failed to insert chunk to LanceDB: {}", e);
-                                        } else {
-                                            success_count += 1;
-                                        }
-                                    }
-                                    Err(e) => error!("Embedding failed for chunk in {:?}: {}", path, e),
+                    let filename  = path.file_name().unwrap_or_default()
+                                       .to_string_lossy().to_string();
+                    let phys_path = path.to_string_lossy().to_string();
+
+                    let mut eng = engine.lock().unwrap();
+                    let mut n_ok = 0usize;
+
+                    for chunk in &chunks {
+                        match eng.embed(chunk) {
+                            Ok(vec) => {
+                                let id = uuid::Uuid::new_v4().to_string();
+                                match db.insert_file(&id, &filename, &phys_path, vec).await {
+                                    Ok(_)  => n_ok += 1,
+                                    Err(e) => error!("LanceDB insert: {}", e),
                                 }
                             }
-                            info!("Ingested {:?} into {} semantic chunks", path, success_count);
+                            Err(e) => error!("Embed chunk from {:?}: {}", path, e),
                         }
                     }
+                    info!("Ingested {:?} → {} chunks", path, n_ok);
+                    println!("📄  Ingested {} → {} chunk(s)", filename, n_ok);
                 }
             }
         }
-        Commands::Mount { mount_point } => {
-            info!("Mounting FUSE filesystem to {:?}", mount_point);
-            println!("Mounting FUSE at {:?}", mount_point);
-            
-            let db_path = data_dir.join("lancedb");
-            let db = Arc::new(OmitDb::init(db_path).await?);
-            let engine = Arc::new(Mutex::new(EmbeddingEngine::new()?));
 
-            let fs = OmitFs::new(db, engine, raw_dir);
+        // ── mount ─────────────────────────────────────────────────────────────
+        Commands::Mount { mount_point } => {
+            info!("omitfs mount {:?}", mount_point);
+
+            if !mount_point.exists() {
+                std::fs::create_dir_all(&mount_point)
+                    .context("Failed to create mount point")?;
+            }
+
+            let db_path = data_dir.join("lancedb");
+            let db      = Arc::new(OmitDb::init(db_path).await?);
+            let engine  = Arc::new(Mutex::new(EmbeddingEngine::new()?));
+            let fs      = OmitFs::new(db, engine, raw_dir);
+
+            println!("🌌  Mounting OmitFS at {:?}", mount_point);
+            println!("    Navigate with: cd \"{}\"/your intent here\"\"", mount_point.display());
+
             let options = vec![
                 fuser::MountOption::FSName("omitfs".to_string()),
                 fuser::MountOption::AutoUnmount,
+                fuser::MountOption::AllowOther,
             ];
-            
-            fuser::mount2(fs, mount_point, &options)?;
+            fuser::mount2(fs, &mount_point, &options)
+                .context("FUSE mount failed")?;
         }
 
+        // ── select ────────────────────────────────────────────────────────────
         Commands::Select { query } => {
             let db_path = data_dir.join("lancedb");
-            let db = Arc::new(OmitDb::init(db_path).await?);
+            let db      = Arc::new(OmitDb::init(db_path).await?);
             let mut engine = EmbeddingEngine::new()?;
 
-            println!("\n🔍 Searching for: \"{}\"...\n", query);
-            let vector = engine.embed(&query)?;
+            println!("\n🔍  Searching: \"{}\"\n", query);
+            let vector  = engine.embed(&query)?;
             let results = db.search(vector, 10).await?;
 
             if results.is_empty() {
-                println!("No files found for query: \"{}\"", query);
+                println!("No files matched \"{}\".", query);
                 return Ok(());
             }
 
             println!("Found {} file(s):\n", results.len());
             for (i, (name, path)) in results.iter().enumerate() {
-                println!("  [{}] {}  →  {}", i + 1, name, path);
+                println!("  [{}]  {}  →  {}", i + 1, name, path);
             }
 
-            println!("\nSelect a file number (or 0 to quit): ");
-            let mut input = String::new();
-            std::io::stdin().read_line(&mut input)?;
-            let choice: usize = input.trim().parse().unwrap_or(0);
+            print!("\nSelect number (0 to quit): ");
+            std::io::stdout().flush()?;
+            let mut buf = String::new();
+            std::io::stdin().read_line(&mut buf)?;
+            let choice: usize = buf.trim().parse().unwrap_or(0);
 
             if choice == 0 || choice > results.len() {
-                println!("Aborted.");
+                println!("Quit.");
                 return Ok(());
             }
 
             let (filename, phys_path) = &results[choice - 1];
-            println!("\nSelected: {}  ({})", filename, phys_path);
-            println!("");
-            println!("What would you like to do?");
-            println!("  [o] Open   — opens with $EDITOR / xdg-open");
-            println!("  [d] Delete — permanently removes the file from the void");
-            println!("  [p] Print path — prints the physical path to stdout");
-            println!("  [c] Copy   — duplicates the file to a new location");
-            println!("  [m] Move   — relocates the file to a new path");
-            println!("  [q] Quit");
-            println!("");
+            println!("\nSelected: {}  ({})\n", filename, phys_path);
+            println!("  [o]  Open        — launch with $EDITOR / xdg-open");
+            println!("  [d]  Delete      — remove file permanently from the void");
+            println!("  [p]  Print path  — print absolute physical path");
+            println!("  [c]  Copy        — duplicate to a new location");
+            println!("  [m]  Move        — relocate the physical file");
+            println!("  [q]  Quit\n");
             print!("Choice: ");
+            std::io::stdout().flush()?;
 
             let mut action = String::new();
             std::io::stdin().read_line(&mut action)?;
 
             match action.trim() {
                 "o" => {
-                    // Open with $EDITOR if set, otherwise xdg-open / open
                     let editor = std::env::var("EDITOR").unwrap_or_else(|_| {
-                        if cfg!(target_os = "macos") { "open".into() } else { "xdg-open".into() }
+                        if cfg!(target_os = "macos") { "open".into() }
+                        else { "xdg-open".into() }
                     });
-                    std::process::Command::new(&editor).arg(phys_path).status()?;
+                    std::process::Command::new(&editor)
+                        .arg(phys_path)
+                        .status()
+                        .context("Failed to open file")?;
                 }
                 "d" => {
-                    println!("Are you sure you want to delete \"{}\"? [y/N]: ", filename);
-                    let mut confirm = String::new();
-                    std::io::stdin().read_line(&mut confirm)?;
-                    if confirm.trim().to_lowercase() == "y" {
-                        std::fs::remove_file(phys_path)?;
+                    print!("Delete \"{}\"? [y/N]: ", filename);
+                    std::io::stdout().flush()?;
+                    let mut c = String::new();
+                    std::io::stdin().read_line(&mut c)?;
+                    if c.trim().eq_ignore_ascii_case("y") {
+                        std::fs::remove_file(phys_path)
+                            .context("Failed to delete file")?;
                         println!("Deleted.");
                     } else {
                         println!("Aborted.");
                     }
                 }
                 "p" => {
-                    println!("\n📂 Physical path:");
-                    println!("{}", phys_path);
+                    println!("\n📂  {}", phys_path);
                 }
                 "c" => {
-                    println!("Destination path (e.g. ~/Documents/copy.pdf): ");
+                    print!("Destination path: ");
+                    std::io::stdout().flush()?;
                     let mut dest = String::new();
                     std::io::stdin().read_line(&mut dest)?;
                     let dest = shellexpand::tilde(dest.trim()).to_string();
-                    std::fs::copy(phys_path, &dest)?;
+                    std::fs::copy(phys_path, &dest)
+                        .context("Copy failed")?;
                     println!("Copied → {}", dest);
                 }
                 "m" => {
-                    println!("Destination path (e.g. ~/Documents/moved.pdf): ");
+                    print!("Destination path: ");
+                    std::io::stdout().flush()?;
                     let mut dest = String::new();
                     std::io::stdin().read_line(&mut dest)?;
                     let dest = shellexpand::tilde(dest.trim()).to_string();
-                    std::fs::rename(phys_path, &dest)?;
+                    std::fs::rename(phys_path, &dest)
+                        .context("Move failed")?;
                     println!("Moved → {}", dest);
                 }
                 _ => println!("Quit."),

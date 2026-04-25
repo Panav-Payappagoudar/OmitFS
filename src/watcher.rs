@@ -1,23 +1,23 @@
-use anyhow::Result;
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::Path;
-use tokio::sync::mpsc;
+use tokio::sync::mpsc::UnboundedSender;
 use tracing::{error, info};
 
-pub fn start_watcher(raw_dir: &Path, tx: mpsc::UnboundedSender<Event>) -> Result<RecommendedWatcher> {
+/// Spawn a native OS filesystem watcher on `raw_dir`.
+/// All events are forwarded through the provided tokio mpsc sender.
+pub fn start_watcher(
+    raw_dir: &Path,
+    tx: UnboundedSender<Event>,
+) -> anyhow::Result<RecommendedWatcher> {
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
         match res {
-            Ok(event) => {
-                if let Err(e) = tx.send(event) {
-                    error!("Failed to send watch event: {:?}", e);
-                }
-            }
-            Err(e) => error!("watch error: {:?}", e),
+            Ok(event)  => { let _ = tx.send(event); }
+            Err(e)     => error!("watcher error: {}", e),
         }
     })?;
 
     watcher.watch(raw_dir, RecursiveMode::Recursive)?;
-    info!("Watching {:?} for new files...", raw_dir);
-    
+    info!("File watcher active on {:?}", raw_dir);
+
     Ok(watcher)
 }
