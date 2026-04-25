@@ -33,6 +33,11 @@ enum Commands {
         /// The mount point directory
         mount_point: PathBuf,
     },
+    /// Interactive file manager: search, open, copy, move, delete
+    Select {
+        /// Natural language query (e.g. "my calculus notes")
+        query: String,
+    },
 }
 
 fn setup_logging() -> Result<tracing_appender::non_blocking::WorkerGuard> {
@@ -174,6 +179,94 @@ async fn main() -> Result<()> {
             ];
             
             fuser::mount2(fs, mount_point, &options)?;
+        }
+
+        Commands::Select { query } => {
+            let db_path = data_dir.join("lancedb");
+            let db = Arc::new(OmitDb::init(db_path).await?);
+            let mut engine = EmbeddingEngine::new()?;
+
+            println!("\n🔍 Searching for: \"{}\"...\n", query);
+            let vector = engine.embed(&query)?;
+            let results = db.search(vector, 10).await?;
+
+            if results.is_empty() {
+                println!("No files found for query: \"{}\"", query);
+                return Ok(());
+            }
+
+            println!("Found {} file(s):\n", results.len());
+            for (i, (name, path)) in results.iter().enumerate() {
+                println!("  [{}] {}  →  {}", i + 1, name, path);
+            }
+
+            println!("\nSelect a file number (or 0 to quit): ");
+            let mut input = String::new();
+            std::io::stdin().read_line(&mut input)?;
+            let choice: usize = input.trim().parse().unwrap_or(0);
+
+            if choice == 0 || choice > results.len() {
+                println!("Aborted.");
+                return Ok(());
+            }
+
+            let (filename, phys_path) = &results[choice - 1];
+            println!("\nSelected: {}  ({})", filename, phys_path);
+            println!("");
+            println!("What would you like to do?");
+            println!("  [o] Open   — opens with $EDITOR / xdg-open");
+            println!("  [d] Delete — permanently removes the file from the void");
+            println!("  [p] Print path — prints the physical path to stdout");
+            println!("  [c] Copy   — duplicates the file to a new location");
+            println!("  [m] Move   — relocates the file to a new path");
+            println!("  [q] Quit");
+            println!("");
+            print!("Choice: ");
+
+            let mut action = String::new();
+            std::io::stdin().read_line(&mut action)?;
+
+            match action.trim() {
+                "o" => {
+                    // Open with $EDITOR if set, otherwise xdg-open / open
+                    let editor = std::env::var("EDITOR").unwrap_or_else(|_| {
+                        if cfg!(target_os = "macos") { "open".into() } else { "xdg-open".into() }
+                    });
+                    std::process::Command::new(&editor).arg(phys_path).status()?;
+                }
+                "d" => {
+                    println!("Are you sure you want to delete \"{}\"? [y/N]: ", filename);
+                    let mut confirm = String::new();
+                    std::io::stdin().read_line(&mut confirm)?;
+                    if confirm.trim().to_lowercase() == "y" {
+                        std::fs::remove_file(phys_path)?;
+                        println!("Deleted.");
+                    } else {
+                        println!("Aborted.");
+                    }
+                }
+                "p" => {
+                    println!("\n📂 Physical path:");
+                    println!("{}", phys_path);
+                }
+                "c" => {
+                    println!("Destination path (e.g. ~/Documents/copy.pdf): ");
+                    let mut dest = String::new();
+                    std::io::stdin().read_line(&mut dest)?;
+                    let dest = shellexpand::tilde(dest.trim()).to_string();
+                    std::fs::copy(phys_path, &dest)?;
+                    println!("Copied → {}", dest);
+                }
+                "m" => {
+                    println!("Destination path (e.g. ~/Documents/moved.pdf): ");
+                    let mut dest = String::new();
+                    std::io::stdin().read_line(&mut dest)?;
+                    let dest = shellexpand::tilde(dest.trim()).to_string();
+                    std::fs::rename(phys_path, &dest)?;
+                    println!("Moved → {}", dest);
+                }
+                _ => println!("Quit."),
+            }
         }
     }
 

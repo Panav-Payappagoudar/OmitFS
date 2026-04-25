@@ -1,136 +1,312 @@
 <div align="center">
 
-# 🌌 OmitFS
-**Intent-Driven Semantic File Routing for the Modern Operating System**
+<!-- Animated SVG Title Banner -->
+<img src="https://readme-typing-svg.demolab.com?font=Fira+Code&size=38&duration=2000&pause=800&color=6EE7F7&center=true&vCenter=true&width=900&lines=🌌+OmitFS;Intent-Driven+Semantic+File+System;Navigate+by+Meaning%2C+Not+Memory;cd+%22calculus+notes%22+→+homework.pdf+✓" alt="OmitFS animated title" />
 
-[![Rust](https://img.shields.io/badge/Rust-Bare_Metal-blue?style=for-the-badge&logo=rust)](https://www.rust-lang.org)
+<br/>
+
+[![Rust](https://img.shields.io/badge/Rust-2021_Edition-blue?style=for-the-badge&logo=rust)](https://www.rust-lang.org)
 [![FUSE](https://img.shields.io/badge/FUSE-Kernel_Bridge-darkgreen?style=for-the-badge&logo=linux)](https://github.com/libfuse/libfuse)
-[![LanceDB](https://img.shields.io/badge/LanceDB-Vector_Storage-orange?style=for-the-badge)](https://lancedb.com/)
-[![Candle](https://img.shields.io/badge/Candle-Local_SLM-red?style=for-the-badge)](https://github.com/huggingface/candle)
+[![LanceDB](https://img.shields.io/badge/LanceDB-Embedded_Vector_DB-orange?style=for-the-badge)](https://lancedb.com/)
+[![Candle](https://img.shields.io/badge/HuggingFace_Candle-Local_SLM-yellow?style=for-the-badge)](https://github.com/huggingface/candle)
+[![License: MIT](https://img.shields.io/badge/License-MIT-white?style=for-the-badge)](./LICENSE)
 
-*OmitFS obliterates the 50-year-old paradigm of hierarchical directory trees. It replaces rigid folders with a high-dimensional, LLM-powered latent space directly inside your OS kernel.*
+<br/>
 
----
-![OmitFS Terminal Flow](https://raw.githubusercontent.com/tandpfun/skill-icons/main/icons/Rust.svg)
-*(Imagine a sleek terminal GIF here where `cd "calculus notes"` instantly reveals `homework.pdf`)*
+> *"The directory tree was invented in 1964. OmitFS buries it."*
+
 </div>
 
 ---
 
-## 📖 The Narrative: Why OmitFS Exists
+<!-- Animated separator -->
+<img src="https://user-images.githubusercontent.com/73097560/115834477-dbab4500-a447-11eb-908a-139a6edaec5c.gif" width="100%">
 
-**The Problem:** The hierarchical directory tree was introduced in 1964. We are still using the exact same structure today. We force human brains to memorize arbitrary file paths, obscure folder names, and rigid organizational systems just to find a single document. 
+## 📖 The Story: Why This Exists
 
-What happens when you name a file `homework.pdf`, but its contents are entirely about *Calculus Integration*? If you search your computer for "calculus assignment", traditional filesystems fail because the *filename* doesn't match the *intent*.
+Your file is named `homework.pdf`.  
+Its contents? Pure **Calculus Integration**. Derivatives. Integrals. Problem sets.
 
-**The Solution:** OmitFS is a zero-dependency semantic file system. It abandons rigid paths entirely. **You simply tell the operating system what you want.** The physical hard drive acts as a flat, hidden void. Directories are hallucinated in real-time based purely on your semantic intent, scanning the **deep content** of your files, not just their superficial names.
+You type: `find . -name "*calculus*"` — nothing.  
+You type: `ls ~/Documents` — 400 files stare back at you blankly.  
+You dig through folders for 10 minutes.
+
+**This is the broken 1964 paradigm we have accepted as normal.**
+
+OmitFS shatters it. It does not care about your file's name. It reads the **meaning** of your content, embeds it into a 384-dimensional mathematical space, and when you ask for *"calculus notes"*, it surfaces `homework.pdf` instantly — because that file **is** your calculus notes, regardless of what you named it.
 
 ---
 
-## ⚙️ The Core Mechanics (Content-Aware Chunking)
+<img src="https://user-images.githubusercontent.com/73097560/115834477-dbab4500-a447-11eb-908a-139a6edaec5c.gif" width="100%">
 
-1. **The Hidden Void**: Standard directories no longer exist. All files (PDFs, Markdown, Text) are ingested into a single, flat, hidden physical directory. 
-2. **Deep Semantic Chunking**: As a file (like `homework.pdf`) is dropped into the void, OmitFS extracts the raw text and slices it into **overlapping 200-word semantic chunks**. 
-3. **Local Embedding**: Each chunk is passed through a local Hugging Face SLM (`all-MiniLM-L6-v2`) and converted into 384-dimensional mathematical vectors. This guarantees that a calculus equation on page 14 of `homework.pdf` is perfectly indexed.
-4. **Dynamic Hallucination**: When you type `cd "fetch me my calculus assignment"`, OmitFS intercepts the kernel call, mathematically embeds your prompt, deduplicates the chunk hits, and instantly generates a virtual folder in RAM containing `homework.pdf`.
+## ⚙️ How OmitFS Works — The Full Pipeline
+
+```
+ Your file lands in the void       The SLM reads the content           LanceDB stores the meaning
+ ─────────────────────────        ────────────────────────────        ─────────────────────────────
+  ~/.omitfs_data/raw/             homework.pdf  ──►  "solve the      [ 0.12, -0.45, 0.87, ...   ]
+  ├── homework.pdf                integral of x^2..."                 384 dimensions of meaning
+  ├── tax_notes.txt                     │                              stored in embedded LanceDB
+  └── project_arch.md             Chunked into 200-word               without a single network call
+                                   overlapping segments
+                                   → vectorised by Candle SLM
+```
+
+```
+  You type a command              FUSE intercepts the kernel call       Virtual folder materialises
+  ─────────────────────          ─────────────────────────────────     ──────────────────────────
+  cd "calculus notes"    ──►     lookup("calculus notes") fired   ──►  RAM inode map created
+                                 query embedded by SLM                  homework.pdf (inode 42)
+                                 cosine similarity search                ↓
+                                 in LanceDB → top 10 unique files       ls -la works
+                                 deduplicated by physical path          cat works
+                                                                        vim works
+```
 
 ---
-
-## 🏗️ Technical Architecture & Constraints
 
 ```mermaid
 sequenceDiagram
-    participant User
-    participant OS_Kernel as Linux Kernel
-    participant FUSE as OmitFS (FUSE)
-    participant Engine as Candle SLM
-    participant DB as LanceDB
-    
-    User->>OS_Kernel: cd "calculus notes"
-    OS_Kernel->>FUSE: lookup("calculus notes")
-    FUSE->>Engine: embed("calculus notes")
-    Engine-->>FUSE: 384-dimensional Vector [0.12, -0.45, ...]
-    FUSE->>DB: Cosine Similarity Search (Limit 50)
-    DB-->>FUSE: Top Chunk Hits (homework.pdf, lecture.pdf)
-    FUSE->>FUSE: Deduplicate by Physical Path
-    FUSE-->>OS_Kernel: Materialize Virtual Inodes (RAM)
-    User->>OS_Kernel: ls -la
-    OS_Kernel-->>User: homework.pdf, lecture.pdf (Ready to read)
-```
+    actor User
+    participant Shell as Bash / Zsh
+    participant Kernel as Linux Kernel
+    participant FUSE as OmitFS FUSE Driver
+    participant Candle as Candle SLM (local CPU)
+    participant Lance as LanceDB (embedded)
 
-### Absolute Constraints
-- 🦀 **Language**: Pure Rust. Chosen for bare-metal speed and memory safety.
-- 🌉 **The OS Bridge (`fuser`)**: Intercepts POSIX system calls (`cd`, `ls`, `cat`) directly.
-- 🧠 **The Inference Engine (`candle`)**: Runs 100% locally on the CPU.
-- 🗄️ **The Vector Database (`LanceDB`)**: Embedded inside the binary for hyper-fast search.
-- 🛡️ **Air-Gapped Privacy**: Zero Docker containers. Zero Python environments. Zero data sent to OpenAI. **100% offline.**
+    User->>Shell: cd "fetch my calculus assignment"
+    Shell->>Kernel: lookup syscall
+    Kernel->>FUSE: lookup("fetch my calculus assignment")
+    FUSE->>Candle: embed("fetch my calculus assignment")
+    Note over Candle: 100% local inference.<br/>Zero network calls.
+    Candle-->>FUSE: [0.12, -0.45, 0.87, ...] ×384
+    FUSE->>Lance: cosine_search(vector, limit=50)
+    Lance-->>FUSE: chunk hits → deduplicated to top 10 files
+    FUSE-->>Kernel: materialise virtual inodes in RAM
+    Kernel-->>Shell: directory exists ✓
+    User->>Shell: ls -la
+    Shell-->>User: homework.pdf  tax_notes.txt  project_arch.md
+    User->>Shell: cat homework.pdf
+    Shell->>Kernel: read(inode 42)
+    Kernel->>FUSE: read passthrough
+    FUSE-->>User: bytes from ~/.omitfs_data/raw/homework.pdf
+```
 
 ---
 
-## 📂 System File Tree
+```mermaid
+flowchart TD
+    A[📄 File dropped into ~/.omitfs_data/raw] --> B{Extension?}
+    B -- .pdf --> C[pdf-extract: rip raw text]
+    B -- .txt / .md / .rs --> D[std::fs::read_to_string]
+    C --> E[Semantic Chunker<br/>200-word overlapping windows]
+    D --> E
+    E --> F[Candle SLM<br/>all-MiniLM-L6-v2<br/>CPU inference]
+    F --> G[384-dim float vector per chunk]
+    G --> H[(LanceDB<br/>arrow columnar store)]
 
-```text
+    I[User: cd 'calculus notes'] --> J[FUSE lookup syscall]
+    J --> K[Candle: embed query]
+    K --> L[LanceDB: cosine_search top 50]
+    L --> M[Deduplicate by physical path]
+    M --> N[Top 10 unique files]
+    N --> O[RAM Inode Map]
+    O --> P[Virtual directory materialised]
+    P --> Q[ls / cat / vim / grep all work ✓]
+```
+
+---
+
+<img src="https://user-images.githubusercontent.com/73097560/115834477-dbab4500-a447-11eb-908a-139a6edaec5c.gif" width="100%">
+
+## 🏗️ Architecture — Module Map
+
+```
 OmitFS/
-├── Cargo.toml               # Dependency Manifest (Fuser, Candle, LanceDB, pdf-extract)
-├── src/
-│   ├── main.rs              # CLI Router & Background Daemon Ingestion Loop
-│   ├── db.rs                # LanceDB initialization and vector insertion/searching
-│   ├── embedding.rs         # Hugging Face SLM weight loading and text vectorization
-│   ├── watcher.rs           # Asynchronous physical directory monitoring
-│   └── fuse.rs              # POSIX kernel interception and RAM Inode mapping
-└── ~/.omitfs_data/          # Generated at runtime
-    ├── raw/                 # The physical "Void" where raw files are dropped
-    ├── lancedb/             # The embedded vector database binaries
-    └── omitfs.log           # Background diagnostic tracing
+│
+├── Cargo.toml                   ← All dependencies. One binary. No Docker.
+│
+└── src/
+    ├── main.rs                  ← CLI router (clap) + async ingestion daemon loop
+    │                              Subcommands: init · daemon · mount · select
+    │
+    ├── fuse.rs                  ← FUSE kernel bridge (fuser crate)
+    │   ├── lookup()             ← Intercepts cd. Triggers SLM query. Returns virtual inode.
+    │   ├── getattr()            ← Feeds real byte-size, timestamp, permissions to OS
+    │   ├── readdir()            ← Powers ls -la inside hallucinated directories
+    │   ├── open() / read()      ← Maps virtual inode reads to physical file bytes
+    │   ├── unlink()             ← rm file.pdf → deletes from physical void
+    │   └── rename()             ← mv file.pdf ~/docs/ → moves physical file, updates map
+    │
+    ├── embedding.rs             ← Hugging Face Candle SLM engine
+    │   ├── EmbeddingEngine::new()   ← Downloads + caches model weights locally
+    │   └── embed(&str) → Vec<f32>  ← Tokenize → forward pass → CLS pooling → 384-dim vector
+    │
+    ├── db.rs                    ← LanceDB embedded vector store
+    │   ├── OmitDb::init()       ← Creates arrow schema [file_id, filename, path, vector]
+    │   ├── insert_file()        ← Inserts one chunk vector row
+    │   └── search()             ← Cosine similarity search, deduplicates by physical path
+    │
+    └── watcher.rs               ← notify crate: async inotify/FSEvents watcher
+        └── start_watcher()      ← Sends file events → tokio mpsc channel → ingestion loop
+
+~/.omitfs_data/                  ← Runtime data (created by `omitfs init`)
+├── raw/                         ← THE VOID. Drop files here.
+├── lancedb/                     ← Embedded vector DB binary files
+└── omitfs.log                   ← Rotating diagnostic log
 ```
 
 ---
 
-## ⚡ Quick Start & Usage
+<img src="https://user-images.githubusercontent.com/73097560/115834477-dbab4500-a447-11eb-908a-139a6edaec5c.gif" width="100%">
 
-### 1. Prerequisites
-You will need Rust and a FUSE-compatible OS (Linux or macOS / WSL2 for Windows).
+## 🛡️ Engineering Principles
+
+| Principle | What It Means |
+|-----------|--------------|
+| 🦀 **Bare-metal Rust** | No GC pauses. No runtime. Sub-millisecond cold paths. |
+| 🔒 **Air-Gapped Privacy** | Zero network calls. Model weights cached locally. No OpenAI. No telemetry. |
+| 📦 **Zero External Dependencies** | One binary. No Python. No Docker. No database server. |
+| ✅ **POSIX Compliance** | Real `stat()` data. Real permissions. `vim`, `grep`, `cat` work with zero friction. |
+| 🧠 **Content-Aware Search** | Indexes file *content*, not filenames. `homework.pdf` beats `assignment.pdf` for calculus queries. |
+| ⚡ **Semantic Chunking** | 200-word overlapping windows ensure large documents are fully indexed, not just the first page. |
+
+---
+
+<img src="https://user-images.githubusercontent.com/73097560/115834477-dbab4500-a447-11eb-908a-139a6edaec5c.gif" width="100%">
+
+## ⚡ Quick Start
+
+### Prerequisites
 ```bash
-# Install FUSE dependencies (Ubuntu/Debian)
-sudo apt install libfuse-dev
+# Rust toolchain
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# FUSE kernel headers (Linux)
+sudo apt install libfuse-dev pkg-config
+
+# macOS — FUSE already supported via macFUSE
+brew install macfuse
 ```
 
-### 2. Compile the System
+### Build
 ```bash
 git clone https://github.com/Panav-Payappagoudar/OmitFS.git
 cd OmitFS
 cargo build --release
+# Binary at: ./target/release/omitfs
 ```
 
-### 3. Initialize & Mount the Void
+### Run
 ```bash
-# Initialize the hidden void and Vector DB
+# Step 1 — Initialize the void and download model weights (~80MB, one-time)
 ./target/release/omitfs init
 
-# Start the background daemon (Run in a separate terminal)
+# Step 2 — Start the background ingestion daemon (keep this terminal open)
 ./target/release/omitfs daemon
 
-# Mount the FUSE driver
+# Step 3 — In a new terminal, mount the semantic filesystem
 mkdir -p ~/OmitFS_Mount
 ./target/release/omitfs mount ~/OmitFS_Mount
 ```
 
-### 4. Navigate by Meaning
-Drop PDFs or text files into `~/.omitfs_data/raw`. The daemon will automatically extract the text, chunk it, and embed it.
+---
 
+<img src="https://user-images.githubusercontent.com/73097560/115834477-dbab4500-a447-11eb-908a-139a6edaec5c.gif" width="100%">
+
+## 🗂️ Full Command Reference
+
+### Core Lifecycle
+| Command | What It Does |
+|---------|-------------|
+| `omitfs init` | Creates `~/.omitfs_data/raw`, initializes LanceDB, downloads SLM weights |
+| `omitfs daemon` | Starts background watcher. Ingests every file dropped into the raw vault |
+| `omitfs mount <path>` | Attaches the FUSE kernel driver to `<path>`. All `cd`/`ls`/`cat` routed through OmitFS |
+
+### POSIX Commands (inside the mount)
+| Command | What It Does |
+|---------|-------------|
+| `cd "~/OmitFS_Mount/<your intent>"` | Performs semantic query. Materialises virtual directory in RAM |
+| `ls -la` | Lists all semantically matched files with real sizes and timestamps |
+| `cat <file>` | Streams bytes from the physical file in the void |
+| `vim <file>` | Full read/write access to the physical file |
+| `grep "keyword" <file>` | Works natively — real byte passthrough |
+| `rm <file>` | Triggers FUSE `unlink()` → deletes physical file from the void |
+| `mv <file> <destination>` | Triggers FUSE `rename()` → physically moves file, updates inode map |
+
+### Interactive File Manager
+| Command | What It Does |
+|---------|-------------|
+| `omitfs select "<query>"` | Semantic search → numbered file list → interactive action menu |
+
+**Actions available inside `omit select`:**
+
+```
+  [o] Open       — Opens with $EDITOR (or xdg-open / open on macOS)
+  [d] Delete     — Permanently removes the file from the void
+  [p] Print path — Copies/prints the absolute physical path
+  [c] Copy       — Duplicates file to a user-specified destination
+  [m] Move       — Relocates the physical file to a new path
+  [q] Quit       — Exit without action
+```
+
+**Example session:**
 ```bash
-# The OS queries your semantic intent
-cd "~/OmitFS_Mount/fetch me my calculus assignment"
+$ omitfs select "my calculus assignment"
 
-# The terminal reveals `homework.pdf` because its deep contents match your intent!
-ls -la
+🔍 Searching for: "my calculus assignment"...
 
-# Interact with the virtual file
-cat homework.pdf
+Found 3 file(s):
+
+  [1] homework.pdf     →  ~/.omitfs_data/raw/homework.pdf
+  [2] lecture_notes.md →  ~/.omitfs_data/raw/lecture_notes.md
+  [3] practice_set.txt →  ~/.omitfs_data/raw/practice_set.txt
+
+Select a file number (or 0 to quit): 1
+
+Selected: homework.pdf  (~/.omitfs_data/raw/homework.pdf)
+
+What would you like to do?
+  [o] Open   — opens with $EDITOR / xdg-open
+  [d] Delete — permanently removes the file from the void
+  [p] Print path — prints the physical path to stdout
+  [c] Copy   — duplicates the file to a new location
+  [m] Move   — relocates the file to a new path
+  [q] Quit
+
+Choice: m
+Destination path (e.g. ~/Documents/moved.pdf): ~/Desktop/homework.pdf
+Moved → /home/user/Desktop/homework.pdf
 ```
 
 ---
 
+<img src="https://user-images.githubusercontent.com/73097560/115834477-dbab4500-a447-11eb-908a-139a6edaec5c.gif" width="100%">
+
+## 📦 Full Dependency Stack
+
+| Crate | Role |
+|-------|------|
+| `fuser` | FUSE kernel bridge — intercepts all POSIX syscalls |
+| `candle-core` + `candle-transformers` | Local SLM inference engine (HuggingFace, Rust-native) |
+| `lancedb` + `arrow-array` | Embedded columnar vector database |
+| `hf-hub` + `tokenizers` | Model weight fetching + BPE tokenization |
+| `notify` | Native OS file system events (inotify / FSEvents) |
+| `tokio` | Async runtime — watcher, DB queries, signal handling |
+| `clap` | Zero-boilerplate CLI with `derive` macros |
+| `tracing` + `tracing-appender` | Async structured logging to rolling log file |
+| `anyhow` + `thiserror` | Ergonomic error propagation |
+| `pdf-extract` | Native PDF text extraction (no Poppler, no Python) |
+| `shellexpand` | Tilde path expansion in `select` file manager |
+| `uuid` | Unique chunk IDs for LanceDB rows |
+
+---
+
 <div align="center">
-<i>Built for the future of the Operating System.</i>
+<br/>
+<img src="https://readme-typing-svg.demolab.com?font=Fira+Code&size=16&duration=3000&pause=1000&color=6EE7F7&center=true&vCenter=true&width=700&lines=Built+for+the+future+of+the+Operating+System.;Navigate+by+meaning.+Not+memory.;MIT+Licensed.+100%25+Local.+Zero+Dependencies." alt="footer" />
+<br/><br/>
+
+**MIT License** · Built in 🦀 Rust · Powered by [HuggingFace Candle](https://github.com/huggingface/candle) · Stored by [LanceDB](https://lancedb.com/)
+
 </div>

@@ -1,7 +1,8 @@
 use fuser::{
-    FileAttr, FileType, Filesystem, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry, ReplyOpen, Request,
+    FileAttr, FileType, Filesystem, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry, ReplyOpen,
+    ReplyEmpty, Request,
 };
-use libc::{EIO, ENOENT};
+use libc::{EIO, ENOENT, EEXIST};
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::path::PathBuf;
@@ -21,10 +22,8 @@ enum Node {
         children: Vec<(u64, String)>, // ino, filename
     },
     VirtualFile {
-        #[allow(dead_code)]
         name: String,
         physical_path: PathBuf,
-        #[allow(dead_code)]
         parent: u64,
     },
 }
@@ -33,9 +32,7 @@ pub struct OmitFs {
     rt: tokio::runtime::Handle,
     db: Arc<OmitDb>,
     engine: Arc<Mutex<EmbeddingEngine>>,
-    #[allow(dead_code)]
     raw_dir: PathBuf,
-    
     nodes: HashMap<u64, Node>,
     next_inode: u64,
 }
@@ -44,7 +41,6 @@ impl OmitFs {
     pub fn new(db: Arc<OmitDb>, engine: Arc<Mutex<EmbeddingEngine>>, raw_dir: PathBuf) -> Self {
         let mut nodes = HashMap::new();
         nodes.insert(1, Node::Root);
-
         Self {
             rt: tokio::runtime::Handle::current(),
             db,
@@ -55,7 +51,7 @@ impl OmitFs {
         }
     }
 
-    fn generate_inode(&mut self) -> u64 {
+    fn alloc_inode(&mut self) -> u64 {
         let ino = self.next_inode;
         self.next_inode += 1;
         ino
@@ -63,7 +59,7 @@ impl OmitFs {
 
     fn get_attr(&self, ino: u64) -> Option<FileAttr> {
         let node = self.nodes.get(&ino)?;
-        
+
         let mut attr = FileAttr {
             ino,
             size: 0,
@@ -95,30 +91,44 @@ impl OmitFs {
                 if let Ok(metadata) = std::fs::metadata(physical_path) {
                     attr.size = metadata.len();
                     if let Ok(mtime) = metadata.modified() {
-                        // A rough approximation to UNIX time for the FUSE bridge
-                        let duration = mtime.duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap_or_default();
-                        let time_struct = std::time::UNIX_EPOCH + duration;
-                        attr.mtime = time_struct;
-                        attr.atime = time_struct;
-                        attr.ctime = time_struct;
+                        let duration = mtime
+                            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                            .unwrap_or_default();
+                        let ts = std::time::UNIX_EPOCH + duration;
+                        attr.mtime = ts;
+                        attr.atime = ts;
+                        attr.ctime = ts;
                     }
                 }
             }
         }
-        
+
         Some(attr)
+    }
+
+    /// Resolve (ino, index) of a named child inside a VirtualDir
+    fn find_child_in_dir(&self, dir_ino: u64, name: &str) -> Option<(u64, usize)> {
+        if let Some(Node::VirtualDir { children, .. }) = self.nodes.get(&dir_ino) {
+            for (i, (child_ino, child_name)) in children.iter().enumerate() {
+                if child_name == name {
+                    return Some((*child_ino, i));
+                }
+            }
+        }
+        None
     }
 }
 
 impl Filesystem for OmitFs {
+    // ──────────────────────────────── LOOKUP ────────────────────────────────
     fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
         let name_str = name.to_string_lossy().to_string();
-        
-        // 1. If it's a lookup inside a virtual directory (looking for a file)
+
+        // Inside an already-materialised virtual directory
         if let Some(Node::VirtualDir { children, .. }) = self.nodes.get(&parent) {
-            for (child_ino, child_name) in children {
+            for &(child_ino, ref child_name) in children {
                 if child_name == &name_str {
-                    if let Some(attr) = self.get_attr(*child_ino) {
+                    if let Some(attr) = self.get_attr(child_ino) {
                         reply.entry(&TTL, &attr, 0);
                         return;
                     }
@@ -128,145 +138,114 @@ impl Filesystem for OmitFs {
             return;
         }
 
-        // 2. If it's a lookup in the Root directory (initiating a semantic query)
+        // Root directory — semantic query
         if parent == 1 {
-            info!("FUSE semantic query initiated: {}", name_str);
-            
-            // Return cached query if it already exists
-            for (&ino, node) in &self.nodes {
+            info!("Semantic FUSE query: «{}»", name_str);
+
+            // Return cached result if query already exists
+            let cached: Option<u64> = self.nodes.iter().find_map(|(&ino, node)| {
                 if let Node::VirtualDir { name: dir_name, .. } = node {
-                    if dir_name == &name_str {
-                        if let Some(attr) = self.get_attr(ino) {
-                            reply.entry(&TTL, &attr, 0);
-                            return;
-                        }
-                    }
+                    if dir_name == &name_str { Some(ino) } else { None }
+                } else {
+                    None
+                }
+            });
+            if let Some(ino) = cached {
+                if let Some(attr) = self.get_attr(ino) {
+                    reply.entry(&TTL, &attr, 0);
+                    return;
                 }
             }
 
-            // Perform Local Neural Network Semantic Search
+            // Embed query locally
             let vector = {
                 let mut engine = self.engine.lock().unwrap();
                 match engine.embed(&name_str) {
                     Ok(v) => v,
-                    Err(e) => {
-                        error!("Embedding failed: {}", e);
-                        reply.error(EIO);
-                        return;
-                    }
+                    Err(e) => { error!("Embedding failed: {}", e); reply.error(EIO); return; }
                 }
             };
 
-            let db_clone = self.db.clone();
-            let results = self.rt.block_on(async {
-                db_clone.search(vector, 10).await
-            });
+            // Search LanceDB
+            let db = self.db.clone();
+            let results = self.rt.block_on(async { db.search(vector, 10).await });
 
             match results {
                 Ok(files) => {
-                    let dir_ino = self.generate_inode();
+                    let dir_ino = self.alloc_inode();
                     let mut children = Vec::new();
-
                     for (filename, physical_path) in files {
-                        let file_ino = self.generate_inode();
+                        let file_ino = self.alloc_inode();
                         children.push((file_ino, filename.clone()));
-                        
                         self.nodes.insert(file_ino, Node::VirtualFile {
                             name: filename,
                             physical_path: PathBuf::from(physical_path),
                             parent: dir_ino,
                         });
                     }
-
-                    self.nodes.insert(dir_ino, Node::VirtualDir {
-                        name: name_str,
-                        children,
-                    });
-
+                    self.nodes.insert(dir_ino, Node::VirtualDir { name: name_str, children });
                     if let Some(attr) = self.get_attr(dir_ino) {
                         reply.entry(&TTL, &attr, 0);
                     } else {
                         reply.error(EIO);
                     }
                 }
-                Err(e) => {
-                    error!("DB search failed: {}", e);
-                    reply.error(EIO);
-                }
+                Err(e) => { error!("DB search error: {}", e); reply.error(EIO); }
             }
         } else {
             reply.error(ENOENT);
         }
     }
 
+    // ──────────────────────────────── GETATTR ───────────────────────────────
     fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
-        if let Some(attr) = self.get_attr(ino) {
-            reply.attr(&TTL, &attr);
-        } else {
-            reply.error(ENOENT);
+        match self.get_attr(ino) {
+            Some(attr) => reply.attr(&TTL, &attr),
+            None => reply.error(ENOENT),
         }
     }
-    
-    fn readdir(
-        &mut self,
-        _req: &Request,
-        ino: u64,
-        _fh: u64,
-        offset: i64,
-        mut reply: ReplyDirectory,
-    ) {
-        let mut entries = vec![
-            (ino, FileType::Directory, ".".to_string()),
-        ];
-        
+
+    // ──────────────────────────────── READDIR ───────────────────────────────
+    fn readdir(&mut self, _req: &Request, ino: u64, _fh: u64, offset: i64, mut reply: ReplyDirectory) {
+        let mut entries: Vec<(u64, FileType, String)> = vec![(ino, FileType::Directory, ".".into())];
+
         if ino == 1 {
-            entries.push((1, FileType::Directory, "..".to_string()));
-            // The Root void is kept empty intentionally to force intent-based `cd` routing
+            entries.push((1, FileType::Directory, "..".into()));
         } else if let Some(node) = self.nodes.get(&ino) {
             match node {
                 Node::VirtualDir { children, .. } => {
-                    entries.push((1, FileType::Directory, "..".to_string()));
+                    entries.push((1, FileType::Directory, "..".into()));
                     for (child_ino, child_name) in children {
                         entries.push((*child_ino, FileType::RegularFile, child_name.clone()));
                     }
                 }
-                _ => {
-                    reply.error(ENOENT);
-                    return;
-                }
+                _ => { reply.error(ENOENT); return; }
             }
         } else {
             reply.error(ENOENT);
             return;
         }
 
-        for (i, entry) in entries.into_iter().enumerate().skip(offset as usize) {
-            // reply.add returns true if the buffer is full
-            if reply.add(entry.0, (i + 1) as i64, entry.1, entry.2) {
+        for (i, (e_ino, e_kind, e_name)) in entries.into_iter().enumerate().skip(offset as usize) {
+            if reply.add(e_ino, (i + 1) as i64, e_kind, e_name) {
                 break;
             }
         }
         reply.ok();
     }
-    
+
+    // ──────────────────────────────── OPEN ──────────────────────────────────
     fn open(&mut self, _req: &Request, ino: u64, _flags: i32, reply: ReplyOpen) {
-        if let Some(Node::VirtualFile { .. }) = self.nodes.get(&ino) {
-            reply.opened(0, 0); // Assign default file handle 0
-        } else {
-            reply.error(ENOENT);
+        match self.nodes.get(&ino) {
+            Some(Node::VirtualFile { .. }) => reply.opened(0, 0),
+            _ => reply.error(ENOENT),
         }
     }
 
+    // ──────────────────────────────── READ ──────────────────────────────────
     fn read(
-        &mut self,
-        _req: &Request,
-        ino: u64,
-        _fh: u64,
-        offset: i64,
-        size: u32,
-        _flags: i32,
-        _lock_owner: Option<u64>,
-        reply: ReplyData,
+        &mut self, _req: &Request, ino: u64, _fh: u64,
+        offset: i64, size: u32, _flags: i32, _lock: Option<u64>, reply: ReplyData,
     ) {
         if let Some(Node::VirtualFile { physical_path, .. }) = self.nodes.get(&ino) {
             match std::fs::read(physical_path) {
@@ -279,13 +258,101 @@ impl Filesystem for OmitFs {
                         reply.data(&data[start..end]);
                     }
                 }
-                Err(e) => {
-                    error!("Failed to read physical file mapping: {}", e);
-                    reply.error(EIO);
-                }
+                Err(e) => { error!("read passthrough failed: {}", e); reply.error(EIO); }
             }
         } else {
             reply.error(ENOENT);
         }
+    }
+
+    // ──────────────────────────────── UNLINK (delete) ───────────────────────
+    fn unlink(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEmpty) {
+        let name_str = name.to_string_lossy().to_string();
+        if let Some((ino, idx)) = self.find_child_in_dir(parent, &name_str) {
+            if let Some(Node::VirtualFile { physical_path, .. }) = self.nodes.get(&ino) {
+                if let Err(e) = std::fs::remove_file(physical_path) {
+                    error!("Failed to delete {:?}: {}", physical_path, e);
+                    reply.error(EIO);
+                    return;
+                }
+                info!("Deleted {:?}", physical_path);
+            }
+            if let Some(Node::VirtualDir { children, .. }) = self.nodes.get_mut(&parent) {
+                children.remove(idx);
+            }
+            self.nodes.remove(&ino);
+            reply.ok();
+        } else {
+            reply.error(ENOENT);
+        }
+    }
+
+    // ──────────────────────────────── RENAME (move / copy-path) ─────────────
+    // Invoked by: `mv file.txt /new/path/file.txt` (or any rename syscall).
+    // OmitFS moves the physical file on disk and updates internal inode map.
+    fn rename(
+        &mut self, _req: &Request,
+        parent: u64, name: &OsStr,
+        newparent: u64, newname: &OsStr,
+        _flags: u32, reply: ReplyEmpty,
+    ) {
+        let name_str    = name.to_string_lossy().to_string();
+        let newname_str = newname.to_string_lossy().to_string();
+
+        // Resolve the inode and index of the file being moved
+        let Some((ino, old_idx)) = self.find_child_in_dir(parent, &name_str) else {
+            reply.error(ENOENT);
+            return;
+        };
+
+        // Compute destination physical path
+        let new_phys = if let Some(Node::VirtualDir { .. }) = self.nodes.get(&newparent) {
+            // Move inside a virtual dir → land in raw_dir
+            self.raw_dir.join(&newname_str)
+        } else if newparent == 1 {
+            self.raw_dir.join(&newname_str)
+        } else {
+            reply.error(ENOENT);
+            return;
+        };
+
+        // Check collision
+        if new_phys.exists() {
+            reply.error(EEXIST);
+            return;
+        }
+
+        // Perform OS-level move
+        let old_phys = if let Some(Node::VirtualFile { physical_path, .. }) = self.nodes.get(&ino) {
+            physical_path.clone()
+        } else {
+            reply.error(ENOENT);
+            return;
+        };
+
+        if let Err(e) = std::fs::rename(&old_phys, &new_phys) {
+            error!("rename failed {:?} → {:?}: {}", old_phys, new_phys, e);
+            reply.error(EIO);
+            return;
+        }
+        info!("Renamed {:?} → {:?}", old_phys, new_phys);
+
+        // Update inode map
+        if let Some(Node::VirtualFile { name, physical_path, .. }) = self.nodes.get_mut(&ino) {
+            *name = newname_str.clone();
+            *physical_path = new_phys;
+        }
+
+        // Update child list in old parent
+        if let Some(Node::VirtualDir { children, .. }) = self.nodes.get_mut(&parent) {
+            children.remove(old_idx);
+        }
+
+        // Add to new parent (if it's a VirtualDir)
+        if let Some(Node::VirtualDir { children, .. }) = self.nodes.get_mut(&newparent) {
+            children.push((ino, newname_str));
+        }
+
+        reply.ok();
     }
 }
