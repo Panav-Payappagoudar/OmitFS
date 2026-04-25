@@ -1,0 +1,43 @@
+[package]
+name = "omitfs"
+version = "0.1.0"
+edition = "2021"
+description = "Zero-dependency semantic file system"
+
+[dependencies]
+# CLI
+clap = { version = "4.5", features = ["derive"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing-appender = "0.2"
+
+# Error Handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Filesystem & Paths
+dirs = "5.0"
+notify = "6.1"
+
+# Vector Database
+lancedb = "0.10"
+arrow-array = "51.0"
+arrow-schema = "51.0"
+uuid = { version = "1.8", features = ["v4"] }
+
+# AI / ML Embeddings
+candle-core = "0.4"
+candle-transformers = "0.4"
+candle-nn = "0.4"
+hf-hub = "0.3"
+tokenizers = "0.15"
+
+# FUSE
+fuser = "0.14"
+libc = "0.2"
+
+# Async
+tokio = { version = "1.36", features = ["full", "rt-multi-thread"] }
+futures = "0.3"
