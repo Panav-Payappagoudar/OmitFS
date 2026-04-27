@@ -15,6 +15,7 @@ pub mod whisper_transcribe;
 pub mod fuse;
 
 use anyhow::{Context, Result};
+use axum;
 use clap::{Parser, Subcommand};
 use config::Config;
 use db::OmitDb;
@@ -189,6 +190,7 @@ fn chunk_text(text: &str, chunk_words: usize, overlap_words: usize) -> Vec<Strin
 
 async fn ingest_file(
     path:      &std::path::Path,
+    data_dir:  &std::path::Path,
     db:        &OmitDb,
     engine:    &Arc<Mutex<EmbeddingEngine>>,
     cfg:       &Config,
@@ -222,9 +224,7 @@ async fn ingest_file(
 
     // Optional AES-256-GCM encryption of chunk text before DB storage
     let encryptor: Option<crypto::Encryptor> = if cfg.encryption_enabled {
-        match crypto::Encryptor::load_or_create(
-            &path.parent().and_then(|p| p.parent()).unwrap_or(std::path::Path::new(".")),
-        ) {
+        match crypto::Encryptor::load_or_create(data_dir) {
             Ok(e)  => Some(e),
             Err(e) => { error!("Encryption init failed: {}", e); None }
         }
@@ -364,7 +364,7 @@ async fn main() -> Result<()> {
             std::fs::create_dir_all(&raw_dir).context("create raw dir")?;
             let _db = OmitDb::init(data_dir.join("lancedb")).await?;
             println!("Downloading SLM weights (one-time ~80 MB)…");
-            EmbeddingEngine::new().context("init embedding engine")?;
+            EmbeddingEngine::new(&data_dir).context("init embedding engine")?;
             println!("✅  OmitFS v{} ready at {:?}", env!("CARGO_PKG_VERSION"), data_dir);
             println!("    Drop files into : {:?}", raw_dir);
             println!("    Config          : {:?}", data_dir.join("config.toml"));
@@ -377,7 +377,7 @@ async fn main() -> Result<()> {
             println!("🛰  OmitFS daemon watching {:?}", raw_dir);
 
             let db     = Arc::new(OmitDb::init(data_dir.join("lancedb")).await?);
-            let engine = Arc::new(Mutex::new(EmbeddingEngine::new()?));
+            let engine = Arc::new(Mutex::new(EmbeddingEngine::new(&data_dir)?));
             let mut manifest = HashManifest::load(&data_dir)?;
 
             // Index any existing unindexed files on startup
@@ -385,7 +385,7 @@ async fn main() -> Result<()> {
                 if let Ok(e) = entry {
                     let p = e.path();
                     if p.is_file() && manifest.is_stale(&p) {
-                        ingest_file(&p, &db, &engine, &cfg, false, Some(&mut manifest)).await;
+                        ingest_file(&p, &data_dir, &db, &engine, &cfg, false, Some(&mut manifest)).await;
                     }
                 }
             }
@@ -397,12 +397,12 @@ async fn main() -> Result<()> {
                 match event.kind {
                     EventKind::Create(_) => {
                         for path in event.paths {
-                            ingest_file(&path, &db, &engine, &cfg, false, Some(&mut manifest)).await;
+                            ingest_file(&path, &data_dir, &db, &engine, &cfg, false, Some(&mut manifest)).await;
                         }
                     }
                     EventKind::Modify(_) => {
                         for path in event.paths {
-                            ingest_file(&path, &db, &engine, &cfg, true, Some(&mut manifest)).await;
+                            ingest_file(&path, &data_dir, &db, &engine, &cfg, true, Some(&mut manifest)).await;
                         }
                     }
                     EventKind::Remove(_) => {
@@ -426,7 +426,7 @@ async fn main() -> Result<()> {
         Commands::Reindex => {
             println!("♻️   Re-indexing all files in {:?}…", raw_dir);
             let db     = Arc::new(OmitDb::init(data_dir.join("lancedb")).await?);
-            let engine = Arc::new(Mutex::new(EmbeddingEngine::new()?));
+            let engine = Arc::new(Mutex::new(EmbeddingEngine::new(&data_dir)?));
             let mut n  = 0usize;
             for entry in std::fs::read_dir(&raw_dir).context("read raw dir")? {
                 if let Ok(e) = entry {
@@ -434,7 +434,7 @@ async fn main() -> Result<()> {
                     if p.is_file() {
                         // delete old then re-insert
                         let _ = db.delete_by_path(&p.to_string_lossy()).await;
-                        ingest_file(&p, &db, &engine, &cfg, false, None).await;
+                        ingest_file(&p, &data_dir, &db, &engine, &cfg, false, None).await;
                         n += 1;
                     }
                 }
@@ -454,7 +454,7 @@ async fn main() -> Result<()> {
             {
                 std::fs::create_dir_all(&mount_point).context("create mount point")?;
                 let db     = Arc::new(OmitDb::init(data_dir.join("lancedb")).await?);
-                let engine = Arc::new(Mutex::new(EmbeddingEngine::new()?));
+                let engine = Arc::new(Mutex::new(EmbeddingEngine::new(&data_dir)?));
                 let fs     = OmitFs::new(db, engine, raw_dir, cfg);
                 println!("🌌  Mounted at {:?} — cd into any concept to search", mount_point);
                 let opts = vec![
@@ -476,7 +476,7 @@ async fn main() -> Result<()> {
         // ── select ────────────────────────────────────────────────────────────
         Commands::Select { query } => {
             let db     = Arc::new(OmitDb::init(data_dir.join("lancedb")).await?);
-            let mut engine = EmbeddingEngine::new()?;
+            let mut engine = EmbeddingEngine::new(&data_dir)?;
 
             println!("\n🔍  Searching: \"{query}\"\n");
             let vector  = engine.embed(&query)?;
@@ -552,7 +552,7 @@ async fn main() -> Result<()> {
         // ── ask ───────────────────────────────────────────────────────────────
         Commands::Ask { question, model } => {
             let db     = Arc::new(OmitDb::init(data_dir.join("lancedb")).await?);
-            let mut engine = EmbeddingEngine::new()?;
+            let mut engine = EmbeddingEngine::new(&data_dir)?;
             let mdl    = model.unwrap_or_else(|| cfg.ollama_model.clone());
 
             println!("\n🤖  Searching context for: \"{question}\"\n");
@@ -587,7 +587,7 @@ async fn main() -> Result<()> {
         Commands::Serve { port } => {
             let port   = port.unwrap_or(cfg.serve_port);
             let db     = Arc::new(OmitDb::init(data_dir.join("lancedb")).await?);
-            let engine = Arc::new(Mutex::new(EmbeddingEngine::new()?));
+            let engine = Arc::new(Mutex::new(EmbeddingEngine::new(&data_dir)?));
             let state  = server::AppState { db, engine, cfg: Arc::new(cfg) };
             let app    = server::build_router(state);
             let addr: SocketAddr = format!("127.0.0.1:{port}").parse().context("Invalid address")?;
@@ -600,7 +600,7 @@ async fn main() -> Result<()> {
         // ── mcp ───────────────────────────────────────────────────────────────
         Commands::Mcp => {
             let db     = Arc::new(OmitDb::init(data_dir.join("lancedb")).await?);
-            let engine = Arc::new(Mutex::new(EmbeddingEngine::new()?));
+            let engine = Arc::new(Mutex::new(EmbeddingEngine::new(&data_dir)?));
             mcp::run_mcp_server(db, engine, Arc::new(cfg)).await?;
         }
 

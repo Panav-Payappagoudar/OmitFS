@@ -37,11 +37,17 @@ When you search, it understands **intent**, not keywords:
 | `"the API key config for production"` | `config/prod.env` |
 | `"my resume"` | `CV_2024_v3.pdf` |
 
-**Zero internet required after the one-time model download.** No OpenAI API. No rate limits. No privacy leak. Runs on CPU. Flies on GPU.
+**Zero internet required.** No OpenAI API. No rate limits. No privacy leak. Runs on CPU. Flies on GPU. Supports fully air-gapped environments.
 
 ---
 
-## 🏗 Architecture
+## 🔒 Local-First & Air-Gapped
+
+OmitFS is designed for maximum privacy and reliability.
+- **No External APIs**: No token limits, no subscriptions, no data leaving your machine.
+- **Bundled Intelligence**: Uses `all-MiniLM-L6-v2` (384-dim) for embeddings and `Llama3` (via Ollama) for RAG.
+- **Air-Gapped Ready**: You can manually place model weights in `~/.omitfs_data/model/` to avoid any internet requests during initialization.
+- **Encryption**: Optional AES-256-GCM encryption for all indexed metadata.
 
 ```mermaid
 graph TD

@@ -13,21 +13,33 @@ pub struct EmbeddingEngine {
 }
 
 impl EmbeddingEngine {
-    /// Downloads weights on first run, then loads from local HuggingFace cache.
+    /// Loads from ~/.omitfs_data/model if present, otherwise downloads weights
+    /// from HuggingFace cache (requires internet for first run).
     /// Auto-detects CUDA → Metal → CPU in that priority order.
-    pub fn new() -> Result<Self> {
+    pub fn new(data_dir: &std::path::Path) -> Result<Self> {
         let device = Self::best_device();
         info!("Embedding device: {:?}", device);
 
-        let api  = Api::new().context("Failed to init HuggingFace cache API")?;
-        let repo = api.repo(Repo::new(
-            "sentence-transformers/all-MiniLM-L6-v2".to_string(),
-            RepoType::Model,
-        ));
-
-        let config_path    = repo.get("config.json").context("Fetch config.json")?;
-        let tokenizer_path = repo.get("tokenizer.json").context("Fetch tokenizer.json")?;
-        let weights_path   = repo.get("model.safetensors").context("Fetch model.safetensors")?;
+        let model_dir = data_dir.join("model");
+        let (config_path, tokenizer_path, weights_path) = if model_dir.join("config.json").exists() {
+            info!("Loading model from local path: {:?}", model_dir);
+            (
+                model_dir.join("config.json"),
+                model_dir.join("tokenizer.json"),
+                model_dir.join("model.safetensors"),
+            )
+        } else {
+            let api  = Api::new().context("Failed to init HuggingFace cache API")?;
+            let repo = api.repo(Repo::new(
+                "sentence-transformers/all-MiniLM-L6-v2".to_string(),
+                RepoType::Model,
+            ));
+            (
+                repo.get("config.json").context("Fetch config.json")?,
+                repo.get("tokenizer.json").context("Fetch tokenizer.json")?,
+                repo.get("model.safetensors").context("Fetch model.safetensors")?,
+            )
+        };
 
         let config: Config = serde_json::from_str(
             &std::fs::read_to_string(&config_path)?
