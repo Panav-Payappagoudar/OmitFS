@@ -179,12 +179,16 @@ async fn main() -> Result<()> {
                 for path in event.paths {
                     if !path.is_file() { continue; }
 
-                    let Some(text) = extract_text(&path) else { continue; };
-                    let chunks = chunk_text(&text);
-
                     let filename  = path.file_name().unwrap_or_default()
                                        .to_string_lossy().to_string();
                     let phys_path = path.to_string_lossy().to_string();
+
+                    // ALWAYS index the filename so binary files remain searchable
+                    let mut chunks = vec![filename.clone()];
+
+                    if let Some(text) = extract_text(&path) {
+                        chunks.extend(chunk_text(&text));
+                    }
 
                     let mut eng = match engine.lock() {
                         Ok(guard) => guard,
