@@ -59,6 +59,8 @@ impl OmitDb {
         Ok(Self { table })
     }
 
+    // ─── Insert ──────────────────────────────────────────────────────────────
+
     pub async fn insert_file(
         &self,
         file_id: &str,
@@ -68,15 +70,13 @@ impl OmitDb {
     ) -> Result<()> {
         let schema = self.table.schema().await.context("Failed to get table schema")?;
 
-        // Build arrow arrays
         let ids    = Arc::new(StringArray::from(vec![file_id]));
         let names  = Arc::new(StringArray::from(vec![filename]));
         let paths  = Arc::new(StringArray::from(vec![physical_path]));
 
-        // FixedSizeListArray from flat Float32Array
-        let flat   = Float32Array::from(vector);
+        let flat      = Float32Array::from(vector);
         let list_field = Arc::new(Field::new("item", DataType::Float32, true));
-        let vecs   = Arc::new(FixedSizeListArray::try_new(
+        let vecs      = Arc::new(FixedSizeListArray::try_new(
             list_field,
             VEC_DIM,
             Arc::new(flat),
@@ -100,15 +100,52 @@ impl OmitDb {
         Ok(())
     }
 
-    /// Cosine similarity search. Returns up to `limit` unique physical files
-    /// (deduplicated from chunk-level hits).
+    // ─── Delete by physical path ──────────────────────────────────────────────
+    // Removes ALL rows (chunks) associated with a given physical file path.
+    // Used on file-delete and before re-embedding a modified file (upsert).
+
+    pub async fn delete_by_path(&self, physical_path: &str) -> Result<()> {
+        // LanceDB delete takes a SQL-style predicate string
+        let predicate = format!(
+            "physical_path = '{}'",
+            // Escape any single-quotes in the path itself
+            physical_path.replace('\'', "''")
+        );
+        self.table
+            .delete(&predicate)
+            .await
+            .context("Failed to delete rows from LanceDB")?;
+        Ok(())
+    }
+
+    // ─── Upsert (delete old chunks then re-insert) ────────────────────────────
+    // Call this when a file is modified so stale vectors are purged first.
+
+    pub async fn upsert_file(
+        &self,
+        file_id: &str,
+        filename: &str,
+        physical_path: &str,
+        vector: Vec<f32>,
+    ) -> Result<()> {
+        // Only delete once per physical path (caller may call this per-chunk;
+        // deletion is idempotent in LanceDB so it's safe to call multiple times).
+        self.delete_by_path(physical_path).await?;
+        self.insert_file(file_id, filename, physical_path, vector).await
+    }
+
+    // ─── Search ──────────────────────────────────────────────────────────────
+    // Cosine similarity search. Returns up to `limit` unique physical files
+    // (deduplicated from chunk-level hits). `overfetch` controls how many raw
+    // rows are pulled to satisfy deduplication needs.
+
     pub async fn search(
         &self,
         query_vector: Vec<f32>,
         limit: usize,
+        overfetch: usize,
     ) -> Result<Vec<(String, String)>> {
-        // Over-fetch (limit × 5) to absorb duplicate chunk hits for the same file
-        let over_limit = limit * 5;
+        let over_limit = limit * overfetch;
 
         let mut stream = self
             .table

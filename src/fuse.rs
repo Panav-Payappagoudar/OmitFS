@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, UNIX_EPOCH};
 use tracing::{error, info};
 
+use crate::config::Config;
 use crate::db::OmitDb;
 use crate::embedding::EmbeddingEngine;
 
@@ -38,6 +39,7 @@ pub struct OmitFs {
     db:         Arc<OmitDb>,
     engine:     Arc<Mutex<EmbeddingEngine>>,
     raw_dir:    PathBuf,
+    cfg:        Config,
     nodes:      HashMap<u64, Node>,
     next_inode: u64,
 }
@@ -47,6 +49,7 @@ impl OmitFs {
         db:      Arc<OmitDb>,
         engine:  Arc<Mutex<EmbeddingEngine>>,
         raw_dir: PathBuf,
+        cfg:     Config,
     ) -> Self {
         let mut nodes = HashMap::new();
         nodes.insert(ROOT_INO, Node::Root);
@@ -55,6 +58,7 @@ impl OmitFs {
             db,
             engine,
             raw_dir,
+            cfg,
             nodes,
             next_inode: 2,
         }
@@ -198,8 +202,10 @@ impl Filesystem for OmitFs {
         };
 
         // Vector search in LanceDB
-        let db = self.db.clone();
-        let search_result = self.rt.block_on(async { db.search(vector, 10).await });
+        let db        = self.db.clone();
+        let max       = self.cfg.max_results;
+        let overfetch = self.cfg.overfetch_factor;
+        let search_result = self.rt.block_on(async { db.search(vector, max, overfetch).await });
 
         match search_result {
             Ok(files) => {
