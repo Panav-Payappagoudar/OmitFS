@@ -1,12 +1,15 @@
 pub mod config;
+pub mod crypto;
 pub mod db;
 pub mod embedding;
 pub mod hasher;
 pub mod mcp;
+pub mod ocr;
 pub mod rag;
 pub mod reranker;
 pub mod server;
 pub mod watcher;
+pub mod whisper_transcribe;
 
 #[cfg(unix)]
 pub mod fuse;
@@ -102,7 +105,7 @@ fn setup_logging(data_dir: &std::path::Path) -> Result<tracing_appender::non_blo
 
 // ─── Text extraction ──────────────────────────────────────────────────────────
 
-fn extract_text(path: &std::path::Path) -> Option<String> {
+fn extract_text(path: &std::path::Path, ocr_enabled: bool, whisper_enabled: bool) -> Option<String> {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
     match ext.as_str() {
         "pdf" => {
@@ -115,10 +118,12 @@ fn extract_text(path: &std::path::Path) -> Option<String> {
         "docx" => extract_docx(path).ok().filter(|t| !t.trim().is_empty()),
         "xlsx" | "xls" | "xlsm" | "ods" => extract_sheet(path).ok().filter(|t| !t.trim().is_empty()),
         "csv" => std::fs::read_to_string(path).ok().filter(|t| !t.trim().is_empty()),
-        // Known binary — indexed by filename only
-        "jpg"|"jpeg"|"png"|"gif"|"bmp"|"webp"|"mp3"|"mp4"|"mov"|"avi"|"mkv"
-        |"exe"|"dll"|"so"|"dylib"|"zip"|"tar"|"gz"|"7z"|"rar"
-        |"bin"|"class"|"pyc"|"wasm"|"psd"|"ai"|"sketch" => None,
+        "jpg"|"jpeg"|"png"|"gif"|"bmp"|"webp"|"tiff"|"tif" => {
+            if ocr_enabled { ocr::extract_image_text(path) } else { None }
+        }
+        "mp3"|"wav"|"flac"|"ogg"|"m4a"|"mp4"|"mov"|"avi"|"mkv"|"webm" => {
+            if whisper_enabled { whisper_transcribe::transcribe(path) } else { None }
+        }
         _ => {
             let buf = std::fs::read(path).ok()?;
             if buf.iter().take(1024).any(|&b| b == 0) { return None; }
@@ -211,9 +216,21 @@ async fn ingest_file(
 
     // Always embed the filename so binary files are searchable
     let mut text_chunks: Vec<String> = vec![filename.clone()];
-    if let Some(text) = extract_text(path) {
+    if let Some(text) = extract_text(path, cfg.ocr_enabled, cfg.whisper_enabled) {
         text_chunks.extend(chunk_text(&text, cfg.chunk_words, cfg.overlap_words));
     }
+
+    // Optional AES-256-GCM encryption of chunk text before DB storage
+    let encryptor: Option<crypto::Encryptor> = if cfg.encryption_enabled {
+        match crypto::Encryptor::load_or_create(
+            &path.parent().and_then(|p| p.parent()).unwrap_or(std::path::Path::new(".")),
+        ) {
+            Ok(e)  => Some(e),
+            Err(e) => { error!("Encryption init failed: {}", e); None }
+        }
+    } else {
+        None
+    };
 
     let mut n_ok = 0usize;
     for chunk in &text_chunks {
@@ -228,7 +245,12 @@ async fn ingest_file(
             }
         };
         let id = uuid::Uuid::new_v4().to_string();
-        match db.insert_file(&id, &filename, &phys_path, chunk, vec).await {
+        // Encrypt chunk_text before storage if encryption is enabled
+        let stored_chunk = match &encryptor {
+            Some(enc) => enc.encrypt(chunk).unwrap_or_else(|_| chunk.clone()),
+            None      => chunk.clone(),
+        };
+        match db.insert_file(&id, &filename, &phys_path, &stored_chunk, vec).await {
             Ok(_)  => n_ok += 1,
             Err(e) => error!("LanceDB insert: {}", e),
         }

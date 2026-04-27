@@ -33,6 +33,18 @@ pub struct Config {
     /// Port for `omitfs serve`.
     #[serde(default = "default_serve_port")]
     pub serve_port: u16,
+
+    /// Encrypt chunk text in LanceDB with AES-256-GCM.
+    #[serde(default)]
+    pub encryption_enabled: bool,
+
+    /// Extract text from images via Tesseract OCR (requires tesseract on PATH).
+    #[serde(default = "default_true")]
+    pub ocr_enabled: bool,
+
+    /// Transcribe audio/video via Whisper CLI (requires whisper on PATH).
+    #[serde(default = "default_true")]
+    pub whisper_enabled: bool,
 }
 
 fn default_max_results()      -> usize  { 10 }
@@ -42,17 +54,21 @@ fn default_overlap_words()    -> usize  { 50  }
 fn default_ollama_url()       -> String { "http://localhost:11434".into() }
 fn default_ollama_model()     -> String { "llama3".into() }
 fn default_serve_port()       -> u16    { 3030 }
+fn default_true()             -> bool   { true }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
-            max_results:      default_max_results(),
-            overfetch_factor: default_overfetch_factor(),
-            chunk_words:      default_chunk_words(),
-            overlap_words:    default_overlap_words(),
-            ollama_url:       default_ollama_url(),
-            ollama_model:     default_ollama_model(),
-            serve_port:       default_serve_port(),
+            max_results:        default_max_results(),
+            overfetch_factor:   default_overfetch_factor(),
+            chunk_words:        default_chunk_words(),
+            overlap_words:      default_overlap_words(),
+            ollama_url:         default_ollama_url(),
+            ollama_model:       default_ollama_model(),
+            serve_port:         default_serve_port(),
+            encryption_enabled: false,
+            ocr_enabled:        true,
+            whisper_enabled:    true,
         }
     }
 }

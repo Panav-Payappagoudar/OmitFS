@@ -35,6 +35,9 @@ notify = "6"
 # Hashing (incremental indexing)
 sha2 = "0.10"
 
+# Encryption at rest (AES-256-GCM)
+aes-gcm = "0.10"
+
 # Vector database
 lancedb      = "0.5"
 arrow-array  = "49"

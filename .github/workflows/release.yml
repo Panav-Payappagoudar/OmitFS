@@ -1,0 +1,156 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ─── Build binaries for all platforms ────────────────────────────────────────
+  build:
+    name: Build — ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            artifact: omitfs-linux-x86_64
+            binary: omitfs
+
+          - os: macos-14
+            target: aarch64-apple-darwin
+            artifact: omitfs-macos-arm64
+            binary: omitfs
+
+          - os: macos-13
+            target: x86_64-apple-darwin
+            artifact: omitfs-macos-x86_64
+            binary: omitfs
+
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+            artifact: omitfs-windows-x86_64.exe
+            binary: omitfs.exe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Install Linux system deps
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y pkg-config libssl-dev
+
+      - name: Build (release)
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Stage binary (Unix)
+        if: matrix.os != 'windows-2022'
+        run: |
+          cp target/${{ matrix.target }}/release/${{ matrix.binary }} ${{ matrix.artifact }}
+          chmod +x ${{ matrix.artifact }}
+
+      - name: Stage binary (Windows)
+        if: matrix.os == 'windows-2022'
+        shell: pwsh
+        run: Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary }}" "${{ matrix.artifact }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+          retention-days: 7
+
+  # ─── Create GitHub Release and attach all binaries ───────────────────────────
+  release:
+    name: Publish Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          echo "NOTES<<EOF" >> "$GITHUB_OUTPUT"
+          echo "## OmitFS ${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          echo "" >> "$GITHUB_OUTPUT"
+          echo "### Downloads" >> "$GITHUB_OUTPUT"
+          echo "| Platform | Architecture | File |" >> "$GITHUB_OUTPUT"
+          echo "|----------|-------------|------|" >> "$GITHUB_OUTPUT"
+          echo "| Linux    | x86_64      | \`omitfs-linux-x86_64\` |" >> "$GITHUB_OUTPUT"
+          echo "| macOS    | Apple Silicon (M1/M2/M3) | \`omitfs-macos-arm64\` |" >> "$GITHUB_OUTPUT"
+          echo "| macOS    | Intel x86_64 | \`omitfs-macos-x86_64\` |" >> "$GITHUB_OUTPUT"
+          echo "| Windows  | x86_64      | \`omitfs-windows-x86_64.exe\` |" >> "$GITHUB_OUTPUT"
+          echo "" >> "$GITHUB_OUTPUT"
+          echo "### Quick Start" >> "$GITHUB_OUTPUT"
+          echo "\`\`\`bash" >> "$GITHUB_OUTPUT"
+          echo "# 1. Initialize (downloads ~80 MB model weights once)" >> "$GITHUB_OUTPUT"
+          echo "omitfs init" >> "$GITHUB_OUTPUT"
+          echo "" >> "$GITHUB_OUTPUT"
+          echo "# 2. Start the background daemon" >> "$GITHUB_OUTPUT"
+          echo "omitfs daemon &" >> "$GITHUB_OUTPUT"
+          echo "" >> "$GITHUB_OUTPUT"
+          echo "# 3. Drop files into ~/.omitfs_data/raw/ and search!" >> "$GITHUB_OUTPUT"
+          echo "omitfs select \"calculus assignment\"" >> "$GITHUB_OUTPUT"
+          echo "\`\`\`" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: OmitFS ${{ github.ref_name }}
+          body: ${{ steps.notes.outputs.NOTES }}
+          files: release-artifacts/*
+          draft: false
+          prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ─── Lint check on every push/PR ─────────────────────────────────────────────
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Install Linux deps
+        run: sudo apt-get update -qq && sudo apt-get install -y pkg-config libssl-dev
+      - name: Run Clippy
+        run: cargo clippy --all-targets -- -D warnings
