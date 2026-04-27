@@ -80,8 +80,14 @@ impl OmitFs {
             kind:    FileType::Directory,
             perm:    0o755,
             nlink:   2,
+            #[cfg(unix)]
             uid:     unsafe { libc::getuid() },
+            #[cfg(not(unix))]
+            uid:     0,
+            #[cfg(unix)]
             gid:     unsafe { libc::getgid() },
+            #[cfg(not(unix))]
+            gid:     0,
             rdev:    0,
             flags:   0,
             blksize: 512,
@@ -177,7 +183,10 @@ impl Filesystem for OmitFs {
 
         // Embed the query locally
         let vector = {
-            let mut eng = self.engine.lock().unwrap();
+            let mut eng = match self.engine.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
             match eng.embed(&name_str) {
                 Ok(v) => v,
                 Err(e) => {
@@ -298,18 +307,27 @@ impl Filesystem for OmitFs {
     ) {
         match self.nodes.get(&ino) {
             Some(Node::VirtualFile { physical_path, .. }) => {
-                match std::fs::read(physical_path) {
-                    Ok(data) => {
-                        let start = offset as usize;
-                        if start >= data.len() {
-                            reply.data(&[]);
-                        } else {
-                            let end = (start + size as usize).min(data.len());
-                            reply.data(&data[start..end]);
+                use std::io::{Read, Seek, SeekFrom};
+                match std::fs::File::open(physical_path) {
+                    Ok(mut file) => {
+                        if let Err(e) = file.seek(SeekFrom::Start(offset as u64)) {
+                            error!("read seek error (ino {}): {}", ino, e);
+                            reply.error(EIO);
+                            return;
+                        }
+                        let mut buf = vec![0; size as usize];
+                        match file.read(&mut buf) {
+                            Ok(n) => {
+                                reply.data(&buf[..n]);
+                            }
+                            Err(e) => {
+                                error!("read read error (ino {}): {}", ino, e);
+                                reply.error(EIO);
+                            }
                         }
                     }
                     Err(e) => {
-                        error!("read passthrough error (ino {}): {}", ino, e);
+                        error!("read open error (ino {}): {}", ino, e);
                         reply.error(EIO);
                     }
                 }

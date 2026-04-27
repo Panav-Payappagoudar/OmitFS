@@ -72,11 +72,23 @@ fn extract_text(path: &std::path::Path) -> Option<String> {
                 Err(e) => { error!("PDF extract {:?}: {}", path, e); None }
             }
         }
+        "jpg" | "jpeg" | "png" | "gif" | "exe" | "dll" | "so" | "dylib" | "zip" | "tar" | "gz" | "bin" | "class" | "pyc" => {
+            info!("Skipping known binary format: {:?}", path);
+            None
+        }
         _ => {
-            match std::fs::read_to_string(path) {
-                Ok(t) if !t.trim().is_empty() => Some(t),
-                Ok(_) => None,
-                Err(e) => { error!("Read {:?}: {}", path, e); None }
+            let buf = match std::fs::read(path) {
+                Ok(b) => b,
+                Err(e) => { error!("Read {:?}: {}", path, e); return None; }
+            };
+            if buf.iter().take(1024).any(|&b| b == 0) {
+                 info!("Skipping likely binary file: {:?}", path);
+                 None
+            } else {
+                 match String::from_utf8(buf) {
+                     Ok(t) if !t.trim().is_empty() => Some(t),
+                     _ => None,
+                 }
             }
         }
     }
@@ -156,7 +168,7 @@ async fn main() -> Result<()> {
             let db      = Arc::new(OmitDb::init(db_path).await?);
             let engine  = Arc::new(Mutex::new(EmbeddingEngine::new()?));
 
-            let (tx, mut rx) = mpsc::unbounded_channel();
+            let (tx, mut rx) = mpsc::channel(1000);
             // Keep watcher alive for the duration of the daemon
             let _watcher = watcher::start_watcher(&raw_dir, tx)?;
 
@@ -174,7 +186,10 @@ async fn main() -> Result<()> {
                                        .to_string_lossy().to_string();
                     let phys_path = path.to_string_lossy().to_string();
 
-                    let mut eng = engine.lock().unwrap();
+                    let mut eng = match engine.lock() {
+                        Ok(guard) => guard,
+                        Err(poisoned) => poisoned.into_inner(),
+                    };
                     let mut n_ok = 0usize;
 
                     for chunk in &chunks {
@@ -270,12 +285,21 @@ async fn main() -> Result<()> {
                 "o" => {
                     let editor = std::env::var("EDITOR").unwrap_or_else(|_| {
                         if cfg!(target_os = "macos") { "open".into() }
+                        else if cfg!(target_os = "windows") { "cmd".into() }
                         else { "xdg-open".into() }
                     });
-                    std::process::Command::new(&editor)
-                        .arg(phys_path)
-                        .status()
-                        .context("Failed to open file")?;
+                    
+                    if cfg!(target_os = "windows") && std::env::var("EDITOR").is_err() {
+                        std::process::Command::new("cmd")
+                            .args(["/C", "start", "", phys_path])
+                            .status()
+                            .context("Failed to open file")?;
+                    } else {
+                        std::process::Command::new(&editor)
+                            .arg(phys_path)
+                            .status()
+                            .context("Failed to open file")?;
+                    }
                 }
                 "d" => {
                     print!("Delete \"{}\"? [y/N]: ", filename);
