@@ -1,6 +1,11 @@
 pub mod config;
 pub mod db;
 pub mod embedding;
+pub mod hasher;
+pub mod mcp;
+pub mod rag;
+pub mod reranker;
+pub mod server;
 pub mod watcher;
 
 #[cfg(unix)]
@@ -11,8 +16,10 @@ use clap::{Parser, Subcommand};
 use config::Config;
 use db::OmitDb;
 use embedding::EmbeddingEngine;
+use hasher::HashManifest;
 use notify::EventKind;
 use std::io::Write;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
@@ -21,9 +28,9 @@ use tracing::{error, info, warn, Level};
 #[cfg(unix)]
 use fuse::OmitFs;
 
-// ─── CLI Definition ────────────────────────────────────────────────────────────
+// ─── CLI ──────────────────────────────────────────────────────────────────────
 
-/// OmitFS — Intent-driven, 100% local semantic file system
+/// OmitFS — 100% local intent-driven semantic file system
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
@@ -33,32 +40,54 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Create ~/.omitfs_data, init LanceDB, write default config, download SLM weights
+    /// Initialise ~/.omitfs_data, download SLM weights, write default config
     Init,
 
-    /// Run background ingestion daemon (watches raw/ and embeds new/modified/deleted files)
+    /// Background daemon: watch raw/, embed new/changed files, purge deleted ones
     Daemon,
 
-    /// Mount the FUSE semantic filesystem at <mount_point> (Unix only)
+    /// Force re-index ALL files in raw/ (ignores the hash manifest)
+    Reindex,
+
+    /// Mount the FUSE semantic filesystem (Unix only)
     Mount {
         /// Directory to mount (created if missing)
         mount_point: PathBuf,
     },
 
-    /// Interactive semantic file manager: search → open / copy / move / delete
+    /// Interactive TUI file manager: search → open / copy / move / delete
     Select {
-        /// Natural-language query, e.g. "my calculus notes"
+        /// Natural-language query
         query: String,
     },
 
-    /// Install omitfs daemon as a background service (auto-start on boot)
+    /// Answer a question from your local files using RAG + local Ollama LLM
+    Ask {
+        /// The question to answer
+        question: String,
+        /// Ollama model override (default: from config)
+        #[arg(long)]
+        model: Option<String>,
+    },
+
+    /// Start a local web UI + REST API at http://localhost:<port>
+    Serve {
+        /// Override the port (default: from config, 3030)
+        #[arg(long)]
+        port: Option<u16>,
+    },
+
+    /// Expose OmitFS as an MCP tool server (JSON-RPC 2.0 over stdio)
+    Mcp,
+
+    /// Register the daemon as an OS background service (auto-start on login)
     InstallService,
 
-    /// Remove the background service installed by install-service
+    /// Remove the OS background service
     UninstallService,
 }
 
-// ─── Logging ──────────────────────────────────────────────────────────────────
+// ─── Logging ─────────────────────────────────────────────────────────────────
 
 fn setup_logging(data_dir: &std::path::Path) -> Result<tracing_appender::non_blocking::WorkerGuard> {
     let appender = tracing_appender::rolling::daily(data_dir, "omitfs.log");
@@ -71,81 +100,37 @@ fn setup_logging(data_dir: &std::path::Path) -> Result<tracing_appender::non_blo
     Ok(guard)
 }
 
-// ─── Ingestion helpers ────────────────────────────────────────────────────────
+// ─── Text extraction ──────────────────────────────────────────────────────────
 
-/// Extract raw text from a file.
-/// Supported: PDF, Word (.docx), Excel/CSV (.xlsx, .xls, .csv), plain-text / code.
-/// All other binary types are gracefully skipped — they are still searchable by filename.
 fn extract_text(path: &std::path::Path) -> Option<String> {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
-
     match ext.as_str() {
-        // ── PDF ──────────────────────────────────────────────────────────────
         "pdf" => {
             match pdf_extract::extract_text(path) {
                 Ok(t) if !t.trim().is_empty() => Some(t),
-                Ok(_)  => { info!("PDF {:?} yielded no text, skipping content", path); None }
-                Err(e) => { error!("PDF extract {:?}: {}", path, e); None }
+                Ok(_)  => { info!("PDF {:?} has no text", path); None }
+                Err(e) => { error!("PDF {:?}: {}", path, e); None }
             }
         }
-
-        // ── Word documents ────────────────────────────────────────────────────
-        "docx" => {
-            match extract_docx(path) {
-                Ok(t) if !t.trim().is_empty() => Some(t),
-                Ok(_)  => None,
-                Err(e) => { error!("DOCX extract {:?}: {}", path, e); None }
-            }
-        }
-
-        // ── Excel / spreadsheets ──────────────────────────────────────────────
-        "xlsx" | "xls" | "xlsm" | "ods" => {
-            match extract_spreadsheet(path) {
-                Ok(t) if !t.trim().is_empty() => Some(t),
-                Ok(_)  => None,
-                Err(e) => { error!("Spreadsheet extract {:?}: {}", path, e); None }
-            }
-        }
-
-        // ── CSV ───────────────────────────────────────────────────────────────
-        "csv" => {
-            match std::fs::read_to_string(path) {
-                Ok(t) if !t.trim().is_empty() => Some(t),
-                _ => None,
-            }
-        }
-
-        // ── Known binary — skip content extraction but not filename index ─────
-        "jpg" | "jpeg" | "png" | "gif" | "bmp" | "webp" | "mp3" | "mp4" | "mov" | "avi"
-        | "exe" | "dll" | "so" | "dylib" | "zip" | "tar" | "gz" | "7z" | "rar"
-        | "bin" | "class" | "pyc" | "wasm" | "psd" | "ai" | "sketch" => {
-            info!("Skipping known binary format: {:?}", path);
-            None
-        }
-
-        // ── Everything else: attempt UTF-8 text, detect binary via null bytes ──
+        "docx" => extract_docx(path).ok().filter(|t| !t.trim().is_empty()),
+        "xlsx" | "xls" | "xlsm" | "ods" => extract_sheet(path).ok().filter(|t| !t.trim().is_empty()),
+        "csv" => std::fs::read_to_string(path).ok().filter(|t| !t.trim().is_empty()),
+        // Known binary — indexed by filename only
+        "jpg"|"jpeg"|"png"|"gif"|"bmp"|"webp"|"mp3"|"mp4"|"mov"|"avi"|"mkv"
+        |"exe"|"dll"|"so"|"dylib"|"zip"|"tar"|"gz"|"7z"|"rar"
+        |"bin"|"class"|"pyc"|"wasm"|"psd"|"ai"|"sketch" => None,
         _ => {
-            let buf = match std::fs::read(path) {
-                Ok(b)  => b,
-                Err(e) => { error!("Read {:?}: {}", path, e); return None; }
-            };
-            // Fast binary sniff: null byte in first 1 KB → binary
-            if buf.iter().take(1024).any(|&b| b == 0) {
-                info!("Skipping likely binary file: {:?}", path);
-                return None;
-            }
-            match String::from_utf8(buf) {
-                Ok(t) if !t.trim().is_empty() => Some(t),
-                _ => None,
-            }
+            let buf = std::fs::read(path).ok()?;
+            if buf.iter().take(1024).any(|&b| b == 0) { return None; }
+            String::from_utf8(buf).ok().filter(|t| !t.trim().is_empty())
         }
     }
 }
 
-/// Extract text from a `.docx` Word file via `docx-rs`.
-fn extract_docx(path: &std::path::Path) -> Result<String> {
-    let bytes = std::fs::read(path).context("Failed to read docx file")?;
-    let docx = docx_rs::read_docx(&bytes).map_err(|e| anyhow::anyhow!("docx parse error: {:?}", e))?;
+fn extract_docx(path: &std::path::Path) -> anyhow::Result<String> {
+    let bytes = std::fs::read(path)?;
+    let docx  = docx_rs::read_docx(&bytes)
+        .map_err(|e| anyhow::anyhow!("{:?}", e))?;
     let mut out = String::new();
     for child in &docx.document.children {
         if let docx_rs::DocumentChild::Paragraph(para) = child {
@@ -165,16 +150,14 @@ fn extract_docx(path: &std::path::Path) -> Result<String> {
     Ok(out)
 }
 
-/// Extract text from Excel / ODS spreadsheets via `calamine`.
-fn extract_spreadsheet(path: &std::path::Path) -> Result<String> {
+fn extract_sheet(path: &std::path::Path) -> anyhow::Result<String> {
     use calamine::{open_workbook_auto, Reader};
-    let mut wb = open_workbook_auto(path).context("Failed to open spreadsheet")?;
+    let mut wb  = open_workbook_auto(path)?;
     let mut out = String::new();
-    for sheet_name in wb.sheet_names().to_owned() {
-        if let Ok(range) = wb.worksheet_range(&sheet_name) {
+    for name in wb.sheet_names().to_owned() {
+        if let Ok(range) = wb.worksheet_range(&name) {
             for row in range.rows() {
-                let row_str: Vec<String> = row.iter().map(|c| c.to_string()).collect();
-                out.push_str(&row_str.join("\t"));
+                out.push_str(&row.iter().map(|c| c.to_string()).collect::<Vec<_>>().join("\t"));
                 out.push('\n');
             }
         }
@@ -182,12 +165,9 @@ fn extract_spreadsheet(path: &std::path::Path) -> Result<String> {
     Ok(out)
 }
 
-/// Chunk text into overlapping windows.
-/// Window size and overlap are driven by the user config.
 fn chunk_text(text: &str, chunk_words: usize, overlap_words: usize) -> Vec<String> {
     let words: Vec<&str> = text.split_whitespace().collect();
     if words.is_empty() { return vec![]; }
-
     let step = chunk_words.saturating_sub(overlap_words).max(1);
     let mut chunks = Vec::new();
     let mut i = 0;
@@ -200,35 +180,43 @@ fn chunk_text(text: &str, chunk_words: usize, overlap_words: usize) -> Vec<Strin
     chunks
 }
 
-// ─── Ingest a single file (used by daemon for both create and modify) ─────────
+// ─── Core ingest (shared by daemon + reindex) ─────────────────────────────────
 
 async fn ingest_file(
-    path: &std::path::Path,
-    db: &OmitDb,
-    engine: &Arc<Mutex<EmbeddingEngine>>,
-    cfg: &Config,
+    path:      &std::path::Path,
+    db:        &OmitDb,
+    engine:    &Arc<Mutex<EmbeddingEngine>>,
+    cfg:       &Config,
     is_modify: bool,
+    manifest:  Option<&mut HashManifest>,
 ) {
     if !path.is_file() { return; }
+
+    // Skip if already indexed and unchanged (manifest check)
+    if let Some(ref m) = manifest {
+        if !is_modify && !m.is_stale(path) {
+            info!("Skipping unchanged file: {:?}", path);
+            return;
+        }
+    }
 
     let filename  = path.file_name().unwrap_or_default().to_string_lossy().to_string();
     let phys_path = path.to_string_lossy().to_string();
 
-    // On modify: purge old stale vectors first (upsert semantics)
     if is_modify {
         if let Err(e) = db.delete_by_path(&phys_path).await {
-            error!("Failed to purge stale vectors for {:?}: {}", path, e);
+            error!("Purge stale vectors for {:?}: {}", path, e);
         }
     }
 
-    // Build chunk list — always starts with the filename itself
-    let mut chunks = vec![filename.clone()];
+    // Always embed the filename so binary files are searchable
+    let mut text_chunks: Vec<String> = vec![filename.clone()];
     if let Some(text) = extract_text(path) {
-        chunks.extend(chunk_text(&text, cfg.chunk_words, cfg.overlap_words));
+        text_chunks.extend(chunk_text(&text, cfg.chunk_words, cfg.overlap_words));
     }
 
     let mut n_ok = 0usize;
-    for chunk in &chunks {
+    for chunk in &text_chunks {
         let vec = {
             let mut eng = match engine.lock() {
                 Ok(g)  => g,
@@ -236,102 +224,73 @@ async fn ingest_file(
             };
             match eng.embed(chunk) {
                 Ok(v)  => v,
-                Err(e) => { error!("Embed chunk from {:?}: {}", path, e); continue; }
+                Err(e) => { error!("Embed {:?}: {}", path, e); continue; }
             }
         };
         let id = uuid::Uuid::new_v4().to_string();
-        match db.insert_file(&id, &filename, &phys_path, vec).await {
+        match db.insert_file(&id, &filename, &phys_path, chunk, vec).await {
             Ok(_)  => n_ok += 1,
             Err(e) => error!("LanceDB insert: {}", e),
         }
     }
-    info!("Ingested {:?} → {} chunks", path, n_ok);
+
+    info!("Ingested {:?} → {} chunk(s)", path, n_ok);
     println!("📄  Ingested {} → {} chunk(s)", filename, n_ok);
+
+    if let Some(m) = manifest {
+        if let Err(e) = m.mark_indexed(path) {
+            warn!("Failed to update manifest for {:?}: {}", path, e);
+        }
+        if let Err(e) = m.save() {
+            warn!("Failed to save manifest: {}", e);
+        }
+    }
 }
 
-// ─── OS Service installation ──────────────────────────────────────────────────
+// ─── OS service helpers ───────────────────────────────────────────────────────
 
 fn install_service(exe: &str) -> Result<()> {
     #[cfg(target_os = "windows")]
     {
-        // Register as a Windows Task Scheduler task (no admin required for user tasks)
-        let task_xml = format!(
-            r#"<?xml version="1.0" encoding="UTF-16"?>
+        let xml = format!(r#"<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <Triggers><LogonTrigger><Enabled>true</Enabled></LogonTrigger></Triggers>
   <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
     <ExecutionTimeLimit>PT0S</ExecutionTimeLimit></Settings>
-  <Actions><Exec><Command>{exe}</Command>
-    <Arguments>daemon</Arguments></Exec></Actions>
-</Task>"#,
-            exe = exe
-        );
+  <Actions><Exec><Command>{exe}</Command><Arguments>daemon</Arguments></Exec></Actions>
+</Task>"#);
         let xml_path = std::env::temp_dir().join("omitfs_task.xml");
-        std::fs::write(&xml_path, task_xml.as_bytes())
-            .context("Failed to write task XML")?;
-        let status = std::process::Command::new("schtasks")
-            .args(["/Create", "/TN", "OmitFS\\Daemon", "/XML",
-                   xml_path.to_str().unwrap_or(""), "/F"])
-            .status()
-            .context("Failed to run schtasks")?;
-        if !status.success() {
-            anyhow::bail!("schtasks failed — run as administrator or check Task Scheduler");
-        }
-        println!("✅  OmitFS daemon registered as Windows Task Scheduler task 'OmitFS\\Daemon'.");
-        println!("    It will start automatically at every login.");
+        std::fs::write(&xml_path, xml.as_bytes())?;
+        let ok = std::process::Command::new("schtasks")
+            .args(["/Create", "/TN", "OmitFS\\Daemon", "/XML", xml_path.to_str().unwrap_or(""), "/F"])
+            .status().context("schtasks failed")?;
+        if !ok.success() { anyhow::bail!("schtasks returned error"); }
+        println!("✅  Registered as Windows Task Scheduler task 'OmitFS\\Daemon'.");
     }
-
     #[cfg(target_os = "macos")]
     {
-        let plist = format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        let plist = format!(r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>Label</key><string>com.omitfs.daemon</string>
-  <key>ProgramArguments</key>
-  <array><string>{exe}</string><string>daemon</string></array>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
-</dict></plist>"#,
-            exe = exe
-        );
-        let plist_path = dirs::home_dir()
-            .context("Cannot determine home dir")?
-            .join("Library/LaunchAgents/com.omitfs.daemon.plist");
-        std::fs::write(&plist_path, plist).context("Failed to write plist")?;
-        std::process::Command::new("launchctl")
-            .args(["load", plist_path.to_str().unwrap_or("")])
-            .status()
-            .context("launchctl load failed")?;
-        println!("✅  OmitFS daemon registered as macOS LaunchAgent (com.omitfs.daemon).");
-        println!("    It will start automatically at every login.");
+  <key>ProgramArguments</key><array><string>{exe}</string><string>daemon</string></array>
+  <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
+</dict></plist>"#);
+        let p = dirs::home_dir().context("No home dir")?.join("Library/LaunchAgents/com.omitfs.daemon.plist");
+        std::fs::write(&p, plist)?;
+        std::process::Command::new("launchctl").args(["load", p.to_str().unwrap_or("")]).status()?;
+        println!("✅  Registered macOS LaunchAgent (com.omitfs.daemon).");
     }
-
     #[cfg(target_os = "linux")]
     {
-        let unit = format!(
-            "[Unit]\nDescription=OmitFS semantic daemon\nAfter=network.target\n\n\
-             [Service]\nExecStart={exe} daemon\nRestart=on-failure\nRestartSec=5\n\n\
-             [Install]\nWantedBy=default.target\n",
-            exe = exe
-        );
-        let unit_dir = dirs::home_dir()
-            .context("Cannot determine home dir")?
-            .join(".config/systemd/user");
-        std::fs::create_dir_all(&unit_dir).context("Failed to create systemd user dir")?;
-        let unit_path = unit_dir.join("omitfs.service");
-        std::fs::write(&unit_path, unit).context("Failed to write systemd unit")?;
-        std::process::Command::new("systemctl")
-            .args(["--user", "daemon-reload"])
-            .status().context("systemctl daemon-reload failed")?;
-        std::process::Command::new("systemctl")
-            .args(["--user", "enable", "--now", "omitfs.service"])
-            .status().context("systemctl enable failed")?;
-        println!("✅  OmitFS daemon registered as systemd user service (omitfs.service).");
-        println!("    It will start automatically at every login.");
+        let unit = format!("[Unit]\nDescription=OmitFS daemon\nAfter=network.target\n\n[Service]\nExecStart={exe} daemon\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n");
+        let dir = dirs::home_dir().context("No home dir")?.join(".config/systemd/user");
+        std::fs::create_dir_all(&dir)?;
+        std::fs::write(dir.join("omitfs.service"), unit)?;
+        std::process::Command::new("systemctl").args(["--user","daemon-reload"]).status()?;
+        std::process::Command::new("systemctl").args(["--user","enable","--now","omitfs.service"]).status()?;
+        println!("✅  Registered systemd user service (omitfs.service).");
     }
-
     #[allow(unused_variables)]
     let _ = exe;
     Ok(())
@@ -339,44 +298,22 @@ fn install_service(exe: &str) -> Result<()> {
 
 fn uninstall_service() -> Result<()> {
     #[cfg(target_os = "windows")]
-    {
-        let status = std::process::Command::new("schtasks")
-            .args(["/Delete", "/TN", "OmitFS\\Daemon", "/F"])
-            .status()
-            .context("Failed to run schtasks")?;
-        if !status.success() {
-            anyhow::bail!("schtasks /Delete failed — check Task Scheduler manually");
-        }
-        println!("✅  OmitFS daemon removed from Windows Task Scheduler.");
-    }
-
+    { std::process::Command::new("schtasks").args(["/Delete","/TN","OmitFS\\Daemon","/F"]).status()?; println!("✅  Task removed."); }
     #[cfg(target_os = "macos")]
     {
-        let plist_path = dirs::home_dir()
-            .context("Cannot determine home dir")?
-            .join("Library/LaunchAgents/com.omitfs.daemon.plist");
-        let _ = std::process::Command::new("launchctl")
-            .args(["unload", plist_path.to_str().unwrap_or("")])
-            .status();
-        let _ = std::fs::remove_file(&plist_path);
-        println!("✅  OmitFS LaunchAgent removed.");
+        let p = dirs::home_dir().context("No home dir")?.join("Library/LaunchAgents/com.omitfs.daemon.plist");
+        let _ = std::process::Command::new("launchctl").args(["unload", p.to_str().unwrap_or("")]).status();
+        let _ = std::fs::remove_file(&p);
+        println!("✅  LaunchAgent removed.");
     }
-
     #[cfg(target_os = "linux")]
     {
-        let _ = std::process::Command::new("systemctl")
-            .args(["--user", "disable", "--now", "omitfs.service"])
-            .status();
-        let unit_path = dirs::home_dir()
-            .context("Cannot determine home dir")?
-            .join(".config/systemd/user/omitfs.service");
-        let _ = std::fs::remove_file(&unit_path);
-        let _ = std::process::Command::new("systemctl")
-            .args(["--user", "daemon-reload"])
-            .status();
-        println!("✅  OmitFS systemd service removed.");
+        let _ = std::process::Command::new("systemctl").args(["--user","disable","--now","omitfs.service"]).status();
+        let p = dirs::home_dir().context("No home dir")?.join(".config/systemd/user/omitfs.service");
+        let _ = std::fs::remove_file(&p);
+        let _ = std::process::Command::new("systemctl").args(["--user","daemon-reload"]).status();
+        println!("✅  Service removed.");
     }
-
     Ok(())
 }
 
@@ -389,245 +326,265 @@ async fn main() -> Result<()> {
     let data_dir = dirs::home_dir()
         .context("Cannot determine home directory")?
         .join(".omitfs_data");
-
     let raw_dir = data_dir.join("raw");
 
-    // Ensure data_dir exists before logging starts
     if !data_dir.exists() {
-        std::fs::create_dir_all(&data_dir)
-            .context("Failed to create ~/.omitfs_data")?;
+        std::fs::create_dir_all(&data_dir).context("create ~/.omitfs_data")?;
     }
 
     let _log_guard = setup_logging(&data_dir)?;
-
-    // Load config (writes defaults on first run)
     let cfg = Config::load(&data_dir)?;
 
     match cli.command {
         // ── init ─────────────────────────────────────────────────────────────
         Commands::Init => {
             info!("omitfs init");
-            if !raw_dir.exists() {
-                std::fs::create_dir_all(&raw_dir)
-                    .context("Failed to create raw dir")?;
-            }
-
-            let db_path = data_dir.join("lancedb");
-            let _db = OmitDb::init(db_path).await?;
-
-            println!("Downloading SLM weights (one-time, ~80 MB)...");
-            let _engine = EmbeddingEngine::new()
-                .context("Failed to initialize embedding engine")?;
-
-            println!("✅  OmitFS initialized at {:?}", data_dir);
+            std::fs::create_dir_all(&raw_dir).context("create raw dir")?;
+            let _db = OmitDb::init(data_dir.join("lancedb")).await?;
+            println!("Downloading SLM weights (one-time ~80 MB)…");
+            EmbeddingEngine::new().context("init embedding engine")?;
+            println!("✅  OmitFS v{} ready at {:?}", env!("CARGO_PKG_VERSION"), data_dir);
             println!("    Drop files into : {:?}", raw_dir);
-            println!("    Edit config     : {:?}", data_dir.join("config.toml"));
-            println!("\n    Config defaults:");
-            println!("      max_results   = {}", cfg.max_results);
-            println!("      chunk_words   = {}", cfg.chunk_words);
-            println!("      overlap_words = {}", cfg.overlap_words);
+            println!("    Config          : {:?}", data_dir.join("config.toml"));
         }
 
         // ── daemon ────────────────────────────────────────────────────────────
         Commands::Daemon => {
             info!("omitfs daemon starting");
+            std::fs::create_dir_all(&raw_dir).context("create raw dir")?;
             println!("🛰  OmitFS daemon watching {:?}", raw_dir);
 
-            if !raw_dir.exists() {
-                std::fs::create_dir_all(&raw_dir)
-                    .context("raw dir missing — run `omitfs init` first")?;
-            }
+            let db     = Arc::new(OmitDb::init(data_dir.join("lancedb")).await?);
+            let engine = Arc::new(Mutex::new(EmbeddingEngine::new()?));
+            let mut manifest = HashManifest::load(&data_dir)?;
 
-            let db_path = data_dir.join("lancedb");
-            let db      = Arc::new(OmitDb::init(db_path).await?);
-            let engine  = Arc::new(Mutex::new(EmbeddingEngine::new()?));
+            // Index any existing unindexed files on startup
+            for entry in std::fs::read_dir(&raw_dir).context("read raw dir")? {
+                if let Ok(e) = entry {
+                    let p = e.path();
+                    if p.is_file() && manifest.is_stale(&p) {
+                        ingest_file(&p, &db, &engine, &cfg, false, Some(&mut manifest)).await;
+                    }
+                }
+            }
 
             let (tx, mut rx) = mpsc::channel(1000);
             let _watcher = watcher::start_watcher(&raw_dir, tx)?;
 
             while let Some(event) = rx.recv().await {
                 match event.kind {
-                    // ── File created or written ───────────────────────────
-                    EventKind::Create(_) | EventKind::Modify(_) => {
-                        let is_modify = matches!(event.kind, EventKind::Modify(_));
+                    EventKind::Create(_) => {
                         for path in event.paths {
-                            ingest_file(&path, &db, &engine, &cfg, is_modify).await;
+                            ingest_file(&path, &db, &engine, &cfg, false, Some(&mut manifest)).await;
                         }
                     }
-
-                    // ── File removed — purge its vectors from DB ──────────
+                    EventKind::Modify(_) => {
+                        for path in event.paths {
+                            ingest_file(&path, &db, &engine, &cfg, true, Some(&mut manifest)).await;
+                        }
+                    }
                     EventKind::Remove(_) => {
                         for path in event.paths {
-                            let phys_path = path.to_string_lossy().to_string();
-                            info!("File removed: {:?} — purging from DB", path);
-                            if let Err(e) = db.delete_by_path(&phys_path).await {
-                                error!("Failed to delete {:?} from LanceDB: {}", path, e);
+                            let s = path.to_string_lossy().to_string();
+                            if let Err(e) = db.delete_by_path(&s).await {
+                                error!("Delete {:?} from DB: {}", path, e);
                             } else {
-                                println!("🗑️  Purged {} from index.", phys_path);
+                                manifest.remove(&path);
+                                let _ = manifest.save();
+                                println!("🗑️  Purged {}", s);
                             }
                         }
                     }
-
                     _ => {}
                 }
             }
+        }
+
+        // ── reindex ───────────────────────────────────────────────────────────
+        Commands::Reindex => {
+            println!("♻️   Re-indexing all files in {:?}…", raw_dir);
+            let db     = Arc::new(OmitDb::init(data_dir.join("lancedb")).await?);
+            let engine = Arc::new(Mutex::new(EmbeddingEngine::new()?));
+            let mut n  = 0usize;
+            for entry in std::fs::read_dir(&raw_dir).context("read raw dir")? {
+                if let Ok(e) = entry {
+                    let p = e.path();
+                    if p.is_file() {
+                        // delete old then re-insert
+                        let _ = db.delete_by_path(&p.to_string_lossy()).await;
+                        ingest_file(&p, &db, &engine, &cfg, false, None).await;
+                        n += 1;
+                    }
+                }
+            }
+            // Reset manifest
+            let mut mf = HashManifest::load(&data_dir)?;
+            for entry in std::fs::read_dir(&raw_dir).context("read raw dir")? {
+                if let Ok(e) = entry { let _ = mf.mark_indexed(&e.path()); }
+            }
+            let _ = mf.save();
+            println!("✅  Re-indexed {} files.", n);
         }
 
         // ── mount ─────────────────────────────────────────────────────────────
         Commands::Mount { mount_point } => {
             #[cfg(unix)]
             {
-                info!("omitfs mount {:?}", mount_point);
-
-                if !mount_point.exists() {
-                    std::fs::create_dir_all(&mount_point)
-                        .context("Failed to create mount point")?;
-                }
-
-                let db_path = data_dir.join("lancedb");
-                let db      = Arc::new(OmitDb::init(db_path).await?);
-                let engine  = Arc::new(Mutex::new(EmbeddingEngine::new()?));
-                let fs      = OmitFs::new(db, engine, raw_dir, cfg);
-
-                println!("🌌  Mounting OmitFS at {:?}", mount_point);
-                println!("    Navigate with: cd \"{}/your intent here\"", mount_point.display());
-
-                let options = vec![
-                    fuser::MountOption::FSName("omitfs".to_string()),
+                std::fs::create_dir_all(&mount_point).context("create mount point")?;
+                let db     = Arc::new(OmitDb::init(data_dir.join("lancedb")).await?);
+                let engine = Arc::new(Mutex::new(EmbeddingEngine::new()?));
+                let fs     = OmitFs::new(db, engine, raw_dir, cfg);
+                println!("🌌  Mounted at {:?} — cd into any concept to search", mount_point);
+                let opts = vec![
+                    fuser::MountOption::FSName("omitfs".into()),
                     fuser::MountOption::AutoUnmount,
                     fuser::MountOption::AllowOther,
                 ];
-                fuser::mount2(fs, &mount_point, &options)
-                    .context("FUSE mount failed")?;
+                fuser::mount2(fs, &mount_point, &opts).context("FUSE mount failed")?;
             }
-
             #[cfg(not(unix))]
             {
                 let _ = mount_point;
-                eprintln!("❌  FUSE mount is only supported on Linux/macOS.");
-                eprintln!("    On Windows, install WinFSP (https://winfsp.dev/) and recompile");
-                eprintln!("    with the winfsp feature enabled, or use `omitfs select` instead.");
+                eprintln!("❌  FUSE is Unix-only. On Windows install WinFSP (https://winfsp.dev/).");
+                eprintln!("    Use `omitfs select` or `omitfs serve` instead.");
                 std::process::exit(1);
             }
         }
 
         // ── select ────────────────────────────────────────────────────────────
         Commands::Select { query } => {
-            let db_path = data_dir.join("lancedb");
-            let db      = Arc::new(OmitDb::init(db_path).await?);
+            let db     = Arc::new(OmitDb::init(data_dir.join("lancedb")).await?);
             let mut engine = EmbeddingEngine::new()?;
 
-            println!("\n🔍  Searching: \"{}\"\n", query);
+            println!("\n🔍  Searching: \"{query}\"\n");
             let vector  = engine.embed(&query)?;
-            let results = db.search(vector, cfg.max_results, cfg.overfetch_factor).await?;
+            let raw     = db.search_with_chunks(vector, cfg.max_results, cfg.overfetch_factor).await?;
+            let results = reranker::rerank(&query, raw);
 
             if results.is_empty() {
-                println!("No files matched \"{}\".", query);
-                println!("Tip: run `omitfs daemon` to index files in {:?}", raw_dir);
+                println!("No files matched. Run `omitfs daemon` to index files in {:?}.", raw_dir);
                 return Ok(());
             }
-
             println!("Found {} file(s):\n", results.len());
             for (i, (name, path)) in results.iter().enumerate() {
                 println!("  [{}]  {}  →  {}", i + 1, name, path);
             }
-
             print!("\nSelect number (0 to quit): ");
             std::io::stdout().flush()?;
             let mut buf = String::new();
             std::io::stdin().read_line(&mut buf)?;
             let choice: usize = buf.trim().parse().unwrap_or(0);
-
-            if choice == 0 || choice > results.len() {
-                println!("Quit.");
-                return Ok(());
-            }
+            if choice == 0 || choice > results.len() { println!("Quit."); return Ok(()); }
 
             let (filename, phys_path) = &results[choice - 1];
-            println!("\nSelected: {}  ({})\n", filename, phys_path);
-            println!("  [o]  Open        — launch with $EDITOR / system default");
-            println!("  [d]  Delete      — remove file and purge from index");
-            println!("  [p]  Print path  — print absolute physical path");
-            println!("  [c]  Copy        — duplicate to a new location");
-            println!("  [m]  Move        — relocate the physical file");
-            println!("  [q]  Quit\n");
+            println!("\nSelected: {filename}  ({phys_path})\n");
+            println!("  [o] Open   [d] Delete   [p] Print path   [c] Copy   [m] Move   [q] Quit");
             print!("Choice: ");
             std::io::stdout().flush()?;
-
             let mut action = String::new();
             std::io::stdin().read_line(&mut action)?;
 
             match action.trim() {
                 "o" => {
                     if cfg!(target_os = "windows") && std::env::var("EDITOR").is_err() {
-                        std::process::Command::new("cmd")
-                            .args(["/C", "start", "", phys_path])
-                            .status()
-                            .context("Failed to open file")?;
+                        std::process::Command::new("cmd").args(["/C","start","",phys_path]).status()?;
                     } else {
-                        let editor = std::env::var("EDITOR").unwrap_or_else(|_| {
-                            if cfg!(target_os = "macos") { "open".into() }
-                            else { "xdg-open".into() }
-                        });
-                        std::process::Command::new(&editor)
-                            .arg(phys_path)
-                            .status()
-                            .context("Failed to open file")?;
+                        let ed = std::env::var("EDITOR").unwrap_or_else(|_|
+                            if cfg!(target_os = "macos") { "open".into() } else { "xdg-open".into() });
+                        std::process::Command::new(&ed).arg(phys_path).status()?;
                     }
                 }
                 "d" => {
-                    print!("Delete \"{}\"? [y/N]: ", filename);
+                    print!("Delete \"{filename}\"? [y/N]: ");
                     std::io::stdout().flush()?;
                     let mut c = String::new();
                     std::io::stdin().read_line(&mut c)?;
                     if c.trim().eq_ignore_ascii_case("y") {
-                        std::fs::remove_file(phys_path)
-                            .context("Failed to delete file")?;
-                        // Also purge from the vector DB immediately
-                        let db_path = data_dir.join("lancedb");
-                        if let Ok(db2) = OmitDb::init(db_path).await {
-                            if let Err(e) = db2.delete_by_path(phys_path).await {
-                                warn!("File deleted but DB purge failed: {}", e);
-                            }
+                        std::fs::remove_file(phys_path).context("delete file")?;
+                        let db2 = OmitDb::init(data_dir.join("lancedb")).await?;
+                        if let Err(e) = db2.delete_by_path(phys_path).await {
+                            warn!("DB purge after delete: {}", e);
                         }
-                        println!("Deleted and purged from index.");
-                    } else {
-                        println!("Aborted.");
-                    }
+                        println!("Deleted and removed from index.");
+                    } else { println!("Aborted."); }
                 }
-                "p" => {
-                    println!("\n📂  {}", phys_path);
-                }
+                "p" => println!("\n📂  {phys_path}"),
                 "c" => {
-                    print!("Destination path: ");
-                    std::io::stdout().flush()?;
-                    let mut dest = String::new();
-                    std::io::stdin().read_line(&mut dest)?;
-                    let dest = shellexpand::tilde(dest.trim()).to_string();
-                    std::fs::copy(phys_path, &dest)
-                        .context("Copy failed")?;
-                    println!("Copied → {}", dest);
+                    print!("Destination path: "); std::io::stdout().flush()?;
+                    let mut d = String::new(); std::io::stdin().read_line(&mut d)?;
+                    let d = shellexpand::tilde(d.trim()).to_string();
+                    std::fs::copy(phys_path, &d).context("copy")?;
+                    println!("Copied → {d}");
                 }
                 "m" => {
-                    print!("Destination path: ");
-                    std::io::stdout().flush()?;
-                    let mut dest = String::new();
-                    std::io::stdin().read_line(&mut dest)?;
-                    let dest = shellexpand::tilde(dest.trim()).to_string();
-                    std::fs::rename(phys_path, &dest)
-                        .context("Move failed")?;
-                    println!("Moved → {}", dest);
+                    print!("Destination path: "); std::io::stdout().flush()?;
+                    let mut d = String::new(); std::io::stdin().read_line(&mut d)?;
+                    let d = shellexpand::tilde(d.trim()).to_string();
+                    std::fs::rename(phys_path, &d).context("move")?;
+                    println!("Moved → {d}");
                 }
                 _ => println!("Quit."),
             }
         }
 
+        // ── ask ───────────────────────────────────────────────────────────────
+        Commands::Ask { question, model } => {
+            let db     = Arc::new(OmitDb::init(data_dir.join("lancedb")).await?);
+            let mut engine = EmbeddingEngine::new()?;
+            let mdl    = model.unwrap_or_else(|| cfg.ollama_model.clone());
+
+            println!("\n🤖  Searching context for: \"{question}\"\n");
+            let vector = engine.embed(&question)?;
+            let raw    = db.search_with_chunks(vector, cfg.max_results, cfg.overfetch_factor).await?;
+            let chunks = {
+                let reranked_names = reranker::rerank(&question, raw.clone());
+                // Re-attach chunk text in re-ranked order
+                let mut ordered = Vec::new();
+                for (fname, path) in reranked_names {
+                    if let Some(triple) = raw.iter().find(|(f,p,_)| f == &fname && p == &path) {
+                        ordered.push(triple.clone());
+                    }
+                }
+                ordered
+            };
+
+            if chunks.is_empty() {
+                println!("No context found. Run `omitfs daemon` to index files first.");
+                return Ok(());
+            }
+
+            println!("📚  Using {} source(s):", chunks.len());
+            for (i, (fname, _, _)) in chunks.iter().enumerate() {
+                println!("    [{}] {}", i + 1, fname);
+            }
+            println!("\n💬  Answer:\n");
+            rag::ask(&question, &chunks, &cfg.ollama_url, &mdl).await?;
+        }
+
+        // ── serve ─────────────────────────────────────────────────────────────
+        Commands::Serve { port } => {
+            let port   = port.unwrap_or(cfg.serve_port);
+            let db     = Arc::new(OmitDb::init(data_dir.join("lancedb")).await?);
+            let engine = Arc::new(Mutex::new(EmbeddingEngine::new()?));
+            let state  = server::AppState { db, engine, cfg: Arc::new(cfg) };
+            let app    = server::build_router(state);
+            let addr: SocketAddr = format!("127.0.0.1:{port}").parse().context("Invalid address")?;
+            println!("🌐  OmitFS web UI → http://localhost:{port}");
+            println!("    Press Ctrl+C to stop.");
+            let listener = tokio::net::TcpListener::bind(addr).await.context("bind failed")?;
+            axum::serve(listener, app).await.context("server error")?;
+        }
+
+        // ── mcp ───────────────────────────────────────────────────────────────
+        Commands::Mcp => {
+            let db     = Arc::new(OmitDb::init(data_dir.join("lancedb")).await?);
+            let engine = Arc::new(Mutex::new(EmbeddingEngine::new()?));
+            mcp::run_mcp_server(db, engine, Arc::new(cfg)).await?;
+        }
+
         // ── install-service ───────────────────────────────────────────────────
         Commands::InstallService => {
-            let exe = std::env::current_exe()
-                .context("Cannot determine current executable path")?
-                .to_string_lossy()
-                .to_string();
+            let exe = std::env::current_exe()?.to_string_lossy().to_string();
             install_service(&exe)?;
         }
 

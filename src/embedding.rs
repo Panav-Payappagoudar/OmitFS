@@ -1,69 +1,76 @@
 use anyhow::{Context, Result};
-use candle_core::{Device, Tensor, IndexOp, DType};
+use candle_core::{Device, DType, IndexOp, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::bert::{BertModel, Config};
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
+use tracing::info;
 
 pub struct EmbeddingEngine {
-    model: BertModel,
+    model:     BertModel,
     tokenizer: Tokenizer,
-    device: Device,
+    device:    Device,
 }
 
 impl EmbeddingEngine {
-    /// Downloads (first run) or loads from local HuggingFace cache.
-    /// All inference is 100% local — no API key, no network after first run.
+    /// Downloads weights on first run, then loads from local HuggingFace cache.
+    /// Auto-detects CUDA → Metal → CPU in that priority order.
     pub fn new() -> Result<Self> {
-        let device = Device::Cpu;
+        let device = Self::best_device();
+        info!("Embedding device: {:?}", device);
 
-        // hf-hub caches to ~/.cache/huggingface/hub automatically
-        let api = Api::new().context("Failed to init HuggingFace cache API")?;
+        let api  = Api::new().context("Failed to init HuggingFace cache API")?;
         let repo = api.repo(Repo::new(
             "sentence-transformers/all-MiniLM-L6-v2".to_string(),
             RepoType::Model,
         ));
 
-        let config_path   = repo.get("config.json").context("Failed to fetch config.json")?;
-        let tokenizer_path= repo.get("tokenizer.json").context("Failed to fetch tokenizer.json")?;
-        let weights_path  = repo.get("model.safetensors").context("Failed to fetch model.safetensors")?;
+        let config_path    = repo.get("config.json").context("Fetch config.json")?;
+        let tokenizer_path = repo.get("tokenizer.json").context("Fetch tokenizer.json")?;
+        let weights_path   = repo.get("model.safetensors").context("Fetch model.safetensors")?;
 
-        // Parse BERT config
-        let config_str = std::fs::read_to_string(&config_path)?;
-        let config: Config = serde_json::from_str(&config_str)
-            .context("Failed to parse BERT config.json")?;
+        let config: Config = serde_json::from_str(
+            &std::fs::read_to_string(&config_path)?
+        ).context("Parse BERT config.json")?;
 
-        // Load tokenizer
         let tokenizer = Tokenizer::from_file(&tokenizer_path)
-            .map_err(|e| anyhow::anyhow!("Tokenizer load error: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Tokenizer load: {e}"))?;
 
-        // Memory-map safetensors weights into VarBuilder
         let vb = unsafe {
-            VarBuilder::from_mmaped_safetensors(
-                &[&weights_path],
-                DType::F32,
-                &device,
-            )?
+            VarBuilder::from_mmaped_safetensors(&[&weights_path], DType::F32, &device)?
         };
-        let model = BertModel::load(vb, &config)
-            .context("Failed to load BertModel")?;
+        let model = BertModel::load(vb, &config).context("Load BertModel")?;
 
         Ok(Self { model, tokenizer, device })
     }
 
-    /// Embed a text string into a 384-dimensional f32 vector using CLS pooling.
-    /// Takes &mut self because candle's Tensor ops may update internal state.
+    /// Pick the best available compute device.
+    fn best_device() -> Device {
+        // Try CUDA first
+        #[cfg(feature = "cuda")]
+        if let Ok(d) = Device::new_cuda(0) {
+            return d;
+        }
+        // Try Apple Metal
+        #[cfg(feature = "metal")]
+        if let Ok(d) = Device::new_metal(0) {
+            return d;
+        }
+        Device::Cpu
+    }
+
+    /// Embed text into a 384-dim f32 vector via CLS pooling.
+    /// Input is capped at 512 BERT tokens; empty input returns a zero vector.
     pub fn embed(&mut self, text: &str) -> Result<Vec<f32>> {
-        // Encode and cap at 512 tokens (BERT hard limit)
         let encoding = self.tokenizer
             .encode(text, true)
-            .map_err(|e| anyhow::anyhow!("Tokenizer encode error: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Tokenizer encode: {e}"))?;
 
         let mut ids: Vec<u32> = encoding.get_ids().to_vec();
-        ids.truncate(512); // safety cap
+        ids.truncate(512);
 
         if ids.is_empty() {
-            return Ok(vec![0.0f32; 384]);
+            return Ok(vec![0.0_f32; 384]);
         }
 
         let token_ids      = Tensor::new(ids.as_slice(), &self.device)?.unsqueeze(0)?;
@@ -71,9 +78,9 @@ impl EmbeddingEngine {
 
         let embeddings = self.model
             .forward(&token_ids, &token_type_ids)
-            .context("BERT forward pass failed")?;
+            .context("BERT forward pass")?;
 
-        // CLS token = position 0
+        // CLS token at position 0
         let cls: Vec<f32> = embeddings.i((0, 0, ..))?.to_vec1()?;
         Ok(cls)
     }
