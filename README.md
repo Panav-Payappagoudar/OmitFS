@@ -1,263 +1,322 @@
 <div align="center">
 
-<img src="https://capsule-render.vercel.app/api?type=waving&color=7c6af7&height=200&section=header&text=OmitFS&fontSize=80&fontColor=ffffff&animation=fadeIn&fontAlignY=38&desc=Intent-Driven%20Local%20Semantic%20File%20System&descAlignY=60&descSize=18&descColor=c4b5fd" width="100%"/>
+<img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=6,11,20&height=220&section=header&text=OmitFS&fontSize=90&fontColor=ffffff&animation=twinkling&fontAlignY=40&desc=Intent-Driven%20%E2%80%A2%20Local-First%20%E2%80%A2%20Semantic%20File%20System&descAlignY=62&descSize=17&descColor=c4b5fd" width="100%"/>
 
-[![Rust](https://img.shields.io/badge/Built%20with-Rust-f74c00?style=for-the-badge&logo=rust&logoColor=white)](https://www.rust-lang.org/)
-[![License](https://img.shields.io/badge/License-MIT-7c6af7?style=for-the-badge)](LICENSE)
+<a href="https://git.io/typing-svg"><img src="https://readme-typing-svg.demolab.com?font=Fira+Code&weight=600&size=22&pause=1000&color=7C6AF7&center=true&vCenter=true&multiline=true&repeat=true&width=700&height=60&lines=%24+omitfs+select+%22calculus+assignment%22;%E2%86%92+Math_HW_Chapter4_Final.pdf+%E2%9C%93" alt="Typing SVG" /></a>
+
+<br/>
+
+[![Rust](https://img.shields.io/badge/Built%20with-Rust%201.75+-f74c00?style=for-the-badge&logo=rust&logoColor=white)](https://www.rust-lang.org/)
+[![100% Local](https://img.shields.io/badge/100%25%20Local-Zero%20API%20Calls-22c55e?style=for-the-badge&logo=lock&logoColor=white)](#)
+[![No Token Limits](https://img.shields.io/badge/No%20Token%20Limits-Unlimited-a855f7?style=for-the-badge&logo=infinity&logoColor=white)](#)
+[![Air-Gapped](https://img.shields.io/badge/Air--Gapped-Ready-06b6d4?style=for-the-badge&logo=shield&logoColor=white)](#)
+
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-blue?style=for-the-badge)](https://github.com/Panav-Payappagoudar/OmitFS/releases)
-[![100% Local](https://img.shields.io/badge/100%25%20Local-No%20API%20Keys-22c55e?style=for-the-badge&logo=lock)](https://github.com/Panav-Payappagoudar/OmitFS)
-[![Version](https://img.shields.io/badge/version-0.3.0-a855f7?style=for-the-badge)](https://github.com/Panav-Payappagoudar/OmitFS/releases)
+[![License](https://img.shields.io/badge/License-MIT-7c6af7?style=for-the-badge)](LICENSE)
+[![Version](https://img.shields.io/badge/version-0.3.2-a855f7?style=for-the-badge)](https://github.com/Panav-Payappagoudar/OmitFS/releases)
+[![CI](https://img.shields.io/github/actions/workflow/status/Panav-Payappagoudar/OmitFS/release.yml?style=for-the-badge&label=CI%2FCD)](https://github.com/Panav-Payappagoudar/OmitFS/actions)
 
 <br/>
 
 > **Search your files the way you think about them — not by filename.**  
-> *"my calculus assignment from last week"* → finds it instantly. No cloud. No API. No compromise.
-
-<br/>
-
-```
-cd "my calculus assignment from last tuesday"
-# → instantly finds and opens your file, on any OS, forever offline
-```
+> *"my calculus assignment from last week"* → finds it instantly.  
+> **No cloud. No API. No token limits. No compromise. Forever offline.**
 
 </div>
 
 ---
 
-## ⚡ What is OmitFS?
+## ⚡ One-Line Install
 
-OmitFS is a **production-grade, 100% local** semantic file system written entirely in Rust. It indexes your files using a locally-running transformer model (`all-MiniLM-L6-v2`, ~80 MB) and stores their meaning — not just their name — in a local vector database (LanceDB).
+<table>
+<tr>
+<td><strong>🍎 macOS / 🐧 Linux</strong></td>
+<td>
 
-When you search, it understands **intent**, not keywords:
+```bash
+curl -sSf https://raw.githubusercontent.com/Panav-Payappagoudar/OmitFS/main/install.sh | sh
+```
+
+</td>
+</tr>
+<tr>
+<td><strong>🪟 Windows PowerShell</strong></td>
+<td>
+
+```powershell
+irm https://raw.githubusercontent.com/Panav-Payappagoudar/OmitFS/main/install.ps1 | iex
+```
+
+</td>
+</tr>
+</table>
+
+> The installer automatically: detects your OS, downloads the pre-built binary, patches your `PATH`, pulls the Ollama `llama3` model, and runs `omitfs init`. One command, fully operational.
+
+---
+
+## 🧠 What is OmitFS?
+
+OmitFS is a **production-grade, 100% local** semantic file system written entirely in Rust. It indexes your files using a locally-running transformer (`all-MiniLM-L6-v2`, ~80 MB) and stores their *meaning* — not just their name — in a local vector database (LanceDB).
+
+<div align="center">
 
 | You type | OmitFS finds |
-|----------|-------------|
+|:---------|:------------|
 | `"calculus assignment"` | `Math_HW_Chapter4_Final.pdf` |
 | `"meeting notes from last sprint"` | `2024-03-15_standup.docx` |
-| `"the API key config for production"` | `config/prod.env` |
+| `"the production API config"` | `config/prod.env` |
 | `"my resume"` | `CV_2024_v3.pdf` |
+| 🖼️ Text inside a screenshot | Indexed automatically via OCR |
+| 🎙️ Words spoken in a voice memo | Indexed automatically via Whisper |
 
-**Zero internet required.** No OpenAI API. No rate limits. No privacy leak. Runs on CPU. Flies on GPU. Supports fully air-gapped environments.
+</div>
 
 ---
 
 ## 🔒 Local-First & Air-Gapped
 
-OmitFS is designed for maximum privacy and reliability.
-- **No External APIs**: No token limits, no subscriptions, no data leaving your machine.
-- **Bundled Intelligence**: Uses `all-MiniLM-L6-v2` (384-dim) for embeddings and `Llama3` (via Ollama) for RAG.
-- **Air-Gapped Ready**: You can manually place model weights in `~/.omitfs_data/model/` to avoid any internet requests during initialization.
-- **Encryption**: Optional AES-256-GCM encryption for all indexed metadata.
+<div align="center">
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     Your Machine Only                        │
+│                                                             │
+│  ┌──────────┐   ┌────────────┐   ┌──────────────────────┐  │
+│  │  Files   │──▶│  OmitFS   │──▶│  LanceDB (vectors)  │  │
+│  │  raw/    │   │  Daemon   │   │  ~/.omitfs_data/     │  │
+│  └──────────┘   └────────────┘   └──────────────────────┘  │
+│                        │                                     │
+│               ┌────────▼──────┐                             │
+│               │  all-MiniLM  │  ← Runs on CPU/GPU locally  │
+│               │  L6-v2 model │  ← No API. No limits.       │
+│               └───────────────┘                             │
+│                                                             │
+│                 ✗ No OpenAI    ✗ No Anthropic               │
+│                 ✗ No Cloud     ✗ No Internet Required        │
+└─────────────────────────────────────────────────────────────┘
+```
+
+</div>
+
+- **No Token Limits** — The embedding model processes unlimited text locally
+- **No API Keys** — Never touches any external service after initial model download
+- **Air-Gapped Ready** — Place model files in `~/.omitfs_data/model/` for fully offline use
+- **AES-256-GCM Encryption** — Optional encryption of all indexed metadata at rest
+
+---
+
+## 🏗 Architecture
 
 ```mermaid
 graph TD
-    A[Files in raw/] --> B{Daemon}
-    B --> C[Text Extraction]
-    C --> D[PDF / DOCX / XLSX]
-    C --> E[OCR — Images via Tesseract]
-    C --> F[Transcription — Audio/Video via Whisper]
-    C --> G[Plain text / Code]
-    D & E & F & G --> H[Chunker\n200-word overlapping windows]
-    H --> I[EmbeddingEngine\nall-MiniLM-L6-v2 on CPU/GPU]
-    I --> J{Optional AES-256-GCM\nEncryption}
-    J --> K[(LanceDB\nVector Database)]
+    A["📁 Files dropped into raw/"] --> B{OmitFS Daemon}
 
-    K --> L{Search Pipeline}
-    L --> M[Vector ANN Search\ncosine similarity]
-    M --> N[BM25 Re-ranker\nkeyword + filename boost]
-    N --> O[Results]
+    B --> C["📄 Text Extraction"]
+    C --> D["PDF via pdf-extract"]
+    C --> E["DOCX via docx-rs"]
+    C --> F["XLSX/CSV via calamine"]
+    C --> G["🖼 Images → Tesseract OCR"]
+    C --> H["🎙 Audio/Video → Whisper"]
+    C --> I["Plain text / Source code"]
 
-    O --> P[omitfs select\nTUI Manager]
-    O --> Q[omitfs ask\nRAG + Local LLM]
-    O --> R[omitfs serve\nWeb UI :3030]
-    O --> S[omitfs mcp\nAI Agent Protocol]
-    O --> T[FUSE Mount\ncd into a concept]
+    D & E & F & G & H & I --> J["Chunker\n200-word overlapping windows"]
+
+    J --> K{"SHA-256 Manifest\nSkip unchanged files"}
+    K -->|Changed/New| L["EmbeddingEngine\nall-MiniLM-L6-v2\nCPU / CUDA / Metal"]
+    K -->|Unchanged| M["⏭ Skip (instant)"]
+
+    L --> N{"AES-256-GCM\nEncryption\n(optional)"}
+    N --> O[("LanceDB\nVector Database")]
+
+    O --> P{Two-Stage Search}
+    P --> Q["1️⃣ ANN Vector Search\ncosine similarity"]
+    Q --> R["2️⃣ BM25 Re-ranker\nTF-IDF + filename boost"]
+    R --> S["📊 Results"]
+
+    S --> T["omitfs select\n🖥 TUI Manager"]
+    S --> U["omitfs ask\n🤖 RAG + Local LLM"]
+    S --> V["omitfs serve\n🌐 Web UI :3030"]
+    S --> W["omitfs mcp\n🔌 AI Agent Protocol"]
+    S --> X["omitfs mount\n📂 FUSE cd-into-query"]
+```
+
+---
+
+## 🔄 Search Pipeline (Sequence Diagram)
+
+```mermaid
+sequenceDiagram
+    participant U as 👤 User
+    participant CLI as omitfs select
+    participant E as EmbeddingEngine
+    participant DB as LanceDB
+    participant BM25 as BM25 Re-ranker
+
+    U->>CLI: "calculus assignment"
+    CLI->>E: embed("calculus assignment")
+    Note over E: all-MiniLM-L6-v2<br/>runs 100% locally<br/>~5ms on CPU
+    E-->>CLI: [0.23, -0.11, ...] 384-dim vector
+
+    CLI->>DB: ANN search (cosine, top-50 candidates)
+    DB-->>CLI: 50 raw chunk results
+
+    CLI->>BM25: rerank(query, 50 results)
+    Note over BM25: keyword TF-IDF<br/>+ filename boost score
+    BM25-->>CLI: top-10 re-ranked files
+
+    CLI-->>U: Math_HW_Chapter4_Final.pdf ✓
+```
+
+---
+
+## 📂 File Lifecycle (State Diagram)
+
+```mermaid
+stateDiagram-v2
+    [*] --> Dropped : User drops file into raw/
+
+    Dropped --> Hashing : Daemon picks up file
+    Hashing --> Skipped : SHA-256 unchanged
+    Hashing --> Extracting : SHA-256 changed / new
+
+    Skipped --> [*] : No work needed
+
+    Extracting --> Chunking : Text extracted
+    Extracting --> FilenameOnly : Binary / unsupported type
+
+    Chunking --> Embedding : 200-word overlapping chunks
+    FilenameOnly --> Embedding : Filename as single chunk
+
+    Embedding --> Encrypting : Vectors computed
+    Encrypting --> Storing : Chunks encrypted (if enabled)
+    Storing --> Indexed : Written to LanceDB
+
+    Indexed --> Hashing : File modified
+    Indexed --> Purged : File deleted
+    Purged --> [*]
 ```
 
 ---
 
 ## 🚀 Quick Start
 
-### 1 — Download
-
-Grab the binary for your platform from [**GitHub Releases**](https://github.com/Panav-Payappagoudar/OmitFS/releases) — no Rust required.
-
-| Platform | Architecture | Binary |
-|----------|-------------|--------|
-| Linux    | x86_64      | `omitfs-linux-x86_64` |
-| macOS    | Apple Silicon (M1/M2/M3) | `omitfs-macos-arm64` |
-| macOS    | Intel       | `omitfs-macos-x86_64` |
-| Windows  | x86_64      | `omitfs-windows-x86_64.exe` |
-
-Or build from source (requires Rust 1.75+):
+### After the one-line install:
 
 ```bash
-git clone https://github.com/Panav-Payappagoudar/OmitFS
-cd OmitFS
-cargo build --release
-# Binary → target/release/omitfs
-```
+# 1. Drop your files in
+cp ~/Documents/*.pdf ~/.omitfs_data/raw/
+cp ~/Desktop/*.docx ~/.omitfs_data/raw/
 
-For GPU acceleration (optional):
-```bash
-cargo build --release --features cuda   # NVIDIA
-cargo build --release --features metal  # Apple Silicon
-```
+# 2. Start the background daemon (watches for new files in real-time)
+omitfs daemon &
 
-### 2 — Initialize
-
-```bash
-omitfs init
-```
-
-Downloads the `all-MiniLM-L6-v2` model weights (~80 MB, **one time only**). Creates `~/.omitfs_data/` with:
-
-```
-~/.omitfs_data/
-├── raw/              ← drop your files here
-├── lancedb/          ← vector database
-├── manifest.json     ← SHA-256 index (skip re-indexing unchanged files)
-├── config.toml       ← all settings, edit freely
-└── omitfs.log        ← rotating daily logs
-```
-
-### 3 — Index your files
-
-```bash
-# Start the daemon (watches raw/ in real-time)
-omitfs daemon
-
-# Or auto-start at every login
-omitfs install-service
-```
-
-Drop **any** file into `~/.omitfs_data/raw/` and it's indexed automatically.
-
-### 4 — Search
-
-```bash
-# Interactive TUI
+# 3. Search semantically — no exact filenames needed
 omitfs select "calculus assignment"
 
-# Beautiful web UI
+# 4. Or use the beautiful web UI
 omitfs serve
 # → Open http://localhost:3030
 
-# Ask a question (requires Ollama)
-omitfs ask "What formula did I derive in my integration notes?"
+# 5. Ask AI questions about your files (requires Ollama)
+omitfs ask "What integral technique did I use in problem 4?"
+```
 
-# Force full re-index
-omitfs reindex
+### Manual Install (Build From Source)
+
+```bash
+# Requires Rust 1.75+
+git clone https://github.com/Panav-Payappagoudar/OmitFS
+cd OmitFS
+cargo build --release
+./target/release/omitfs init
+
+# GPU acceleration (optional, much faster indexing)
+cargo build --release --features cuda    # NVIDIA
+cargo build --release --features metal   # Apple Silicon
 ```
 
 ---
 
-## 🛠 Command Reference
+## 🛠 Full Command Reference
 
-| Command | Description |
-|---------|-------------|
-| `omitfs init` | First-time setup: create directories, download model weights |
-| `omitfs daemon` | Watch `raw/` and auto-index new/changed files |
-| `omitfs reindex` | Force re-embed all files (ignores manifest) |
-| `omitfs select "<query>"` | TUI: search → open / copy / move / delete |
-| `omitfs ask "<question>"` | RAG Q&A over your files using local Ollama LLM |
-| `omitfs serve [--port N]` | Web UI + REST API at `http://localhost:3030` |
-| `omitfs mcp` | MCP stdio server for Claude Desktop / Cursor / Continue |
-| `omitfs mount <dir>` | FUSE virtual filesystem (Linux/macOS) |
-| `omitfs install-service` | Register daemon as OS service (auto-start on login) |
-| `omitfs uninstall-service` | Remove the OS service |
+<div align="center">
+
+| Command | Description | Notes |
+|:--------|:-----------|:------|
+| `omitfs init` | Create dirs, download model weights | One-time setup |
+| `omitfs daemon` | Watch `raw/`, auto-index files | Keep running |
+| `omitfs reindex` | Force re-embed all files | Ignores SHA manifest |
+| `omitfs select "<query>"` | TUI: search → open/copy/move/delete | Interactive |
+| `omitfs ask "<question>"` | RAG Q&A over your files | Needs Ollama |
+| `omitfs serve [--port N]` | Web UI + REST API | Default: 3030 |
+| `omitfs mcp` | MCP tool server for AI agents | Stdio protocol |
+| `omitfs mount <dir>` | FUSE virtual filesystem | Unix only |
+| `omitfs install-service` | Register daemon as OS service | Auto-start at login |
+| `omitfs uninstall-service` | Remove the OS service | — |
+
+</div>
 
 ---
 
 ## 📂 Supported File Types
 
-| Category | Formats | Method |
-|----------|---------|--------|
-| **Documents** | `.pdf` | `pdf-extract` (text layer) |
-| **Word** | `.docx` | `docx-rs` |
-| **Spreadsheets** | `.xlsx`, `.xls`, `.ods`, `.csv` | `calamine` |
-| **Text / Code** | `.txt`, `.md`, `.rs`, `.py`, `.js`, `.ts`, `.go`, `.java`, `.cpp`, `.json`, `.yaml`, `.toml` … | UTF-8 read |
-| **Images** *(optional)* | `.jpg`, `.png`, `.gif`, `.bmp`, `.tiff` | Tesseract OCR |
-| **Audio / Video** *(optional)* | `.mp3`, `.mp4`, `.wav`, `.mov`, `.flac`, `.webm` | Whisper CLI transcription |
-| **Any binary** | `.zip`, `.exe`, `.psd` … | Filename indexed (content skipped) |
+<div align="center">
 
-> OCR and Whisper are **automatically enabled** when the respective tools are found on your `PATH`. They degrade gracefully to filename-only indexing if not installed.
+| Category | Formats | Engine |
+|:---------|:--------|:-------|
+| 📄 **Documents** | `.pdf` | `pdf-extract` (text layer, no OCR needed) |
+| 📝 **Word** | `.docx` | `docx-rs` — full paragraph extraction |
+| 📊 **Spreadsheets** | `.xlsx` `.xls` `.ods` `.csv` | `calamine` — all sheets, all cells |
+| 💻 **Code & Text** | `.rs` `.py` `.js` `.ts` `.go` `.java` `.cpp` `.md` `.json` `.yaml` `.toml` … | UTF-8 direct read |
+| 🖼️ **Images** *(auto)* | `.jpg` `.png` `.gif` `.bmp` `.tiff` | **Tesseract OCR** (auto-detected) |
+| 🎙️ **Audio/Video** *(auto)* | `.mp3` `.mp4` `.wav` `.mov` `.flac` `.webm` | **Whisper** transcription (auto-detected) |
+| 📦 **Anything else** | `.zip` `.exe` `.psd` … | Filename indexed, content skipped |
 
----
+</div>
 
-## 🔍 How Search Works (Two-Stage Pipeline)
-
-```
-Query: "calculus assignment"
-         │
-         ▼
-[1] Vector Embedding          all-MiniLM-L6-v2 → 384-dim vector (local, ~5ms)
-         │
-         ▼
-[2] ANN Search                LanceDB cosine similarity → top 50 chunks
-         │
-         ▼
-[3] Deduplication             collapse chunk-level hits to unique files
-         │
-         ▼
-[4] BM25 Re-ranking           keyword TF-IDF × filename-presence boost
-         │
-         ▼
-[5] Results                   top-N ranked by combined score
-```
-
-This two-stage approach means a search for `"calculus assignment"` will find `Math_HW_Chapter4_Final.pdf` even if neither word appears in its content, because the **filename itself is embedded** as a dedicated chunk.
+> 💡 **Tesseract** and **Whisper** activate automatically if found on your `PATH`. If not installed, OmitFS gracefully skips those file types — zero crashes, zero errors.
 
 ---
 
-## 🤖 Ask AI (Local RAG)
+## 🤖 Ask AI — Local RAG Pipeline
 
-No API key. No internet. Just answers.
+**No API key. No internet. No monthly bill.**
+
+```
+Question: "What formula did I use in problem 4?"
+         │
+         ▼
+[1]  Embed question locally         all-MiniLM-L6-v2 → 384-dim vector (5ms)
+         │
+         ▼
+[2]  Retrieve top chunks            LanceDB ANN + BM25 re-ranking
+         │
+         ▼
+[3]  Build context prompt           Chunks injected as grounding context
+         │
+         ▼
+[4]  Generate answer                Local Ollama (llama3/phi4/mistral/etc.)
+         │
+         ▼
+[5]  Stream answer token-by-token   Printed to terminal in real-time
+```
 
 ```bash
-# Requires Ollama running locally
-# Install: https://ollama.com → ollama pull llama3
-
-omitfs ask "What integral technique did I use in problem 4?"
-```
-
-The pipeline:
-1. Embeds your question locally
-2. Retrieves the most relevant chunks from your files
-3. Feeds context + question to your local Ollama model
-4. Streams the answer token-by-token to your terminal
-
-Change the model in `~/.omitfs_data/config.toml`:
-
-```toml
-ollama_model = "phi4"   # or gemma3, mistral, deepseek-r1…
+# Change the model in config.toml:
+ollama_model = "phi4"      # Microsoft Phi-4 (fast, smart)
+ollama_model = "llama3"    # Meta Llama 3 (default)
+ollama_model = "mistral"   # Mistral 7B
+ollama_model = "deepseek-r1"  # DeepSeek R1 (best reasoning)
 ```
 
 ---
 
-## 🔒 Encryption at Rest
+## 🔌 MCP — AI Agent Integration
 
-Enable AES-256-GCM encryption of all indexed chunk text:
+OmitFS works as a native tool for Claude Desktop, Cursor, and Continue.
 
-```toml
-# ~/.omitfs_data/config.toml
-encryption_enabled = true
-```
-
-A random 256-bit key is generated at `~/.omitfs_data/encryption.key` (permissions: `0600`).  
-The raw files in `raw/` are **never modified** — only the DB chunk text is encrypted.
-
-> ⚠️ **Back up `encryption.key`**. If lost, indexed content is unrecoverable (your original files remain intact).
-
----
-
-## 🤝 MCP — AI Agent Integration
-
-OmitFS exposes itself as an MCP (Model Context Protocol) server, letting AI agents query your local files as a tool.
-
-### Claude Desktop
-
-Add to `claude_desktop_config.json`:
+**Claude Desktop** (`claude_desktop_config.json`):
 
 ```json
 {
@@ -270,7 +329,7 @@ Add to `claude_desktop_config.json`:
 }
 ```
 
-### Cursor / Continue
+**Cursor** (`.cursor/mcp.json`):
 
 ```json
 {
@@ -281,92 +340,120 @@ Add to `claude_desktop_config.json`:
 }
 ```
 
-**Available tools:**
+| MCP Tool | Arguments | What It Does |
+|:---------|:----------|:------------|
+| `search` | `query: string, limit?: int` | Semantic search over all local files |
+| `ask` | `question: string, model?: string` | RAG Q&A grounded in local files |
 
-| Tool | Arguments | Description |
-|------|-----------|-------------|
-| `search` | `query: string, limit?: int` | Semantic search over local files |
-| `ask` | `question: string, model?: string` | RAG Q&A from local files |
+---
+
+## 🔒 Encryption at Rest
+
+Enable in one line:
+
+```toml
+# ~/.omitfs_data/config.toml
+encryption_enabled = true
+```
+
+- Generates a **random 256-bit AES-GCM key** on first run
+- Stored at `~/.omitfs_data/encryption.key` (Unix: `0600` permissions)
+- Encrypts **chunk text** before it is written to LanceDB
+- Your original files in `raw/` are **never modified**
+
+> ⚠️ Back up `encryption.key`. If lost, indexed content is inaccessible (original files remain intact).
 
 ---
 
 ## ⚙️ Configuration
 
-All settings live in `~/.omitfs_data/config.toml` (auto-generated on `omitfs init`):
-
 ```toml
-# Search
-max_results      = 10     # files returned per query
-overfetch_factor = 5      # internal ANN over-fetch multiplier
-chunk_words      = 200    # words per embedding chunk
-overlap_words    = 50     # overlap between chunks
+# ~/.omitfs_data/config.toml (auto-generated on init)
 
-# Web UI + RAG
+# ── Search ─────────────────────────────────────────
+max_results      = 10     # files returned per query
+overfetch_factor = 5      # ANN over-fetch for BM25 re-ranking
+chunk_words      = 200    # words per embedding chunk
+overlap_words    = 50     # overlap between adjacent chunks
+
+# ── Web UI + RAG ────────────────────────────────────
 serve_port    = 3030
 ollama_url    = "http://localhost:11434"
 ollama_model  = "llama3"
 
-# Security
+# ── Security ────────────────────────────────────────
 encryption_enabled = false   # AES-256-GCM chunk encryption
 
-# Multi-modal (graceful degradation if tools not installed)
+# ── Multi-Modal (degrade gracefully if not installed) ─
 ocr_enabled     = true   # Tesseract image OCR
 whisper_enabled = true   # Whisper audio transcription
 ```
 
 ---
 
-## 🖥️ Desktop GUI
+## 🖥️ Desktop GUI (Tauri)
 
-OmitFS ships with a **Tauri desktop app** (`gui/`) that wraps the full web UI with:
+The `gui/` directory contains a native desktop app:
 
-- **Global hotkey** `Ctrl+Space` — pop up search from anywhere on screen
-- **System tray** — hide to tray, never truly close
-- **Frameless transparent window** — floats above all other apps
+- **`Ctrl+Space`** — global hotkey to instantly show search anywhere on screen
+- **System tray** — hide to tray; OmitFS is always one keystroke away
+- **Frameless transparent window** — floats above other apps
+- Hosts the full web UI inside a native WebView
 
 ```bash
+# Prerequisites: Node.js 18+ and Rust
 cd gui
 npm install
-npm run dev    # development
-npm run build  # production .msi / .dmg / .AppImage
+npm run dev     # development
+npm run build   # creates .msi / .dmg / .AppImage
 ```
-
-Requires: Node.js 18+, Rust, and [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
 
 ---
 
-## 🔬 Performance
+## 📈 Performance
 
-| Operation | Speed (CPU, i7-12th gen) | Speed (GPU, RTX 3080) |
-|-----------|--------------------------|----------------------|
-| Embed single chunk | ~25 ms | ~2 ms |
+<div align="center">
+
+| Operation | CPU (i7-12th gen) | GPU (RTX 3080) |
+|:----------|:-----------------:|:--------------:|
+| Embed one chunk (~200 words) | ~25 ms | ~2 ms |
 | Index 1,000 text files | ~4 min | ~20 sec |
 | Search (query → results) | ~60 ms | ~10 ms |
 | RAG answer (Llama3 8B) | ~8 sec | ~0.8 sec |
+| Daemon restart (files unchanged) | **instant** | **instant** |
 
-Unchanged files are skipped via SHA-256 manifest — **daemon restart is instant** regardless of library size.
+</div>
+
+> The SHA-256 manifest means the daemon never re-indexes files that haven't changed. Even with 100,000 files, restarts are instantaneous.
 
 ---
 
 ## 🗺️ Roadmap
 
-- [x] Local vector search (all-MiniLM-L6-v2)
-- [x] BM25 re-ranking
-- [x] PDF, DOCX, XLSX parsing
-- [x] Image OCR (Tesseract)
-- [x] Audio/video transcription (Whisper)
-- [x] AES-256-GCM encryption at rest
-- [x] Incremental indexing (SHA-256 manifest)
-- [x] RAG Q&A (local Ollama)
-- [x] Web UI + REST API
-- [x] MCP server (Claude Desktop / Cursor)
-- [x] FUSE virtual filesystem
-- [x] Tauri desktop GUI with global hotkey
-- [x] Cross-platform CI/CD (GitHub Actions)
-- [ ] Team LAN sync (P2P, no cloud)
-- [ ] Browser extension ("clip to OmitFS")
-- [ ] Versioned history (time-travel search)
-- [ ] Encrypted cloud relay (E2E, self-hosted)
+<div align="center">
+
+| Feature | Status |
+|:--------|:------:|
+| Local vector search (all-MiniLM-L6-v2) | ✅ |
+| BM25 keyword re-ranking | ✅ |
+| PDF, DOCX, XLSX parsing | ✅ |
+| Image OCR (Tesseract) | ✅ |
+| Audio/video transcription (Whisper) | ✅ |
+| AES-256-GCM encryption at rest | ✅ |
+| Incremental indexing (SHA-256 manifest) | ✅ |
+| RAG Q&A (local Ollama, no API) | ✅ |
+| Web UI + REST API | ✅ |
+| MCP server (Claude Desktop / Cursor) | ✅ |
+| FUSE virtual filesystem (Unix) | ✅ |
+| Tauri desktop GUI + global hotkey | ✅ |
+| Cross-platform CI/CD (GitHub Actions) | ✅ |
+| One-line installer (macOS/Linux/Windows) | ✅ |
+| Team LAN sync (P2P, no cloud) | 🔄 |
+| Browser extension (web clipper) | 🔄 |
+| Stripe billing + license keys | 🔄 |
+| Enterprise SSO / audit logs | 🔄 |
+
+</div>
 
 ---
 
@@ -375,5 +462,11 @@ Unchanged files are skipped via SHA-256 manifest — **daemon restart is instant
 MIT © 2024 [Panav Payappagoudar](https://github.com/Panav-Payappagoudar)
 
 <div align="center">
-<img src="https://capsule-render.vercel.app/api?type=waving&color=7c6af7&height=120&section=footer" width="100%"/>
+
+<br/>
+
+**If OmitFS saved you time, leave a ⭐ — it means a lot.**
+
+<img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=6,11,20&height=120&section=footer&animation=twinkling" width="100%"/>
+
 </div>
