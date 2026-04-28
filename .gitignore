@@ -1,0 +1,24 @@
+# Rust
+/target
+Cargo.lock
+
+# OmitFS Data (Never commit user data or models)
+.omitfs_data/
+*.log
+encryption.key
+manifest.json
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node / Tauri
+gui/node_modules/
+gui/src-tauri/target/
+gui/dist/

@@ -13,16 +13,16 @@ fn tokenize(text: &str) -> Vec<String> {
 }
 
 /// Re-rank `results` (filename, physical_path, chunk_text) against `query`.
-/// Returns `(filename, physical_path)` in descending relevance order.
+/// Returns `(filename, physical_path, chunk_text)` in descending relevance order.
 pub fn rerank(
     query:   &str,
     results: Vec<(String, String, String)>,
-) -> Vec<(String, String)> {
+) -> Vec<(String, String, String)> {
     if results.is_empty() { return vec![]; }
 
     let query_terms = tokenize(query);
     if query_terms.is_empty() {
-        return results.into_iter().map(|(f, p, _)| (f, p)).collect();
+        return results;
     }
 
     let n      = results.len() as f64;
@@ -44,7 +44,7 @@ pub fn rerank(
         (term.clone(), score)
     }).collect();
 
-    let mut scored: Vec<(f64, String, String)> = results
+    let mut scored: Vec<(f64, String, String, String)> = results
         .into_iter()
         .map(|(fname, path, text)| {
             let tokens = tokenize(&text);
@@ -62,10 +62,10 @@ pub fn rerank(
                 .filter(|t| fname.to_lowercase().contains(t.as_str()))
                 .count() as f64 * 3.0;
 
-            (bm25_score + fname_boost, fname, path)
+            (bm25_score + fname_boost, fname, path, text)
         })
         .collect();
 
     scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-    scored.into_iter().map(|(_, f, p)| (f, p)).collect()
+    scored.into_iter().map(|(_, f, p, t)| (f, p, t)).collect()
 }

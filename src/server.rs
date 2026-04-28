@@ -43,7 +43,7 @@ pub struct AppState {
 struct SearchQuery { q: String, limit: Option<usize> }
 
 #[derive(Serialize)]
-struct SearchResult { filename: String, path: String }
+struct SearchResult { filename: String, path: String, snippet: String }
 
 #[derive(Deserialize)]
 struct AskBody { question: String, model: Option<String> }
@@ -94,7 +94,7 @@ async fn handle_search(
         Ok(raw) => {
             let reranked = reranker::rerank(&params.q, raw);
             let results: Vec<SearchResult> = reranked.into_iter()
-                .map(|(filename, path)| SearchResult { filename, path })
+                .map(|(filename, path, snippet)| SearchResult { filename, path, snippet })
                 .collect();
             Json(results).into_response()
         }
@@ -271,6 +271,7 @@ async function search(q) {
         <div class="file-info">
           <div class="file-name">${f.filename}</div>
           <div class="file-path">${f.path}</div>
+          <div class="snippet">${f.snippet}</div>
         </div>
       </div>`;
     }).join('');

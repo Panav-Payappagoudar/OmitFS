@@ -15,7 +15,6 @@ pub mod whisper_transcribe;
 pub mod fuse;
 
 use anyhow::{Context, Result};
-use axum;
 use clap::{Parser, Subcommand};
 use config::Config;
 use db::OmitDb;
@@ -488,7 +487,7 @@ async fn main() -> Result<()> {
                 return Ok(());
             }
             println!("Found {} file(s):\n", results.len());
-            for (i, (name, path)) in results.iter().enumerate() {
+            for (i, (name, path, _)) in results.iter().enumerate() {
                 println!("  [{}]  {}  →  {}", i + 1, name, path);
             }
             print!("\nSelect number (0 to quit): ");
@@ -498,7 +497,7 @@ async fn main() -> Result<()> {
             let choice: usize = buf.trim().parse().unwrap_or(0);
             if choice == 0 || choice > results.len() { println!("Quit."); return Ok(()); }
 
-            let (filename, phys_path) = &results[choice - 1];
+            let (filename, phys_path, _) = &results[choice - 1];
             println!("\nSelected: {filename}  ({phys_path})\n");
             println!("  [o] Open   [d] Delete   [p] Print path   [c] Copy   [m] Move   [q] Quit");
             print!("Choice: ");
@@ -558,17 +557,7 @@ async fn main() -> Result<()> {
             println!("\n🤖  Searching context for: \"{question}\"\n");
             let vector = engine.embed(&question)?;
             let raw    = db.search_with_chunks(vector, cfg.max_results, cfg.overfetch_factor).await?;
-            let chunks = {
-                let reranked_names = reranker::rerank(&question, raw.clone());
-                // Re-attach chunk text in re-ranked order
-                let mut ordered = Vec::new();
-                for (fname, path) in reranked_names {
-                    if let Some(triple) = raw.iter().find(|(f,p,_)| f == &fname && p == &path) {
-                        ordered.push(triple.clone());
-                    }
-                }
-                ordered
-            };
+            let chunks = reranker::rerank(&question, raw);
 
             if chunks.is_empty() {
                 println!("No context found. Run `omitfs daemon` to index files first.");
