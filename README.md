@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=6,11,20&height=220&section=header&text=OmitFS&fontSize=90&fontColor=ffffff&animation=twinkling&fontAlignY=40&desc=Intent-Driven%20%E2%80%A2%20Local-First%20%E2%80%A2%20Semantic%20File%20System&descAlignY=62&descSize=17&descColor=c4b5fd" width="100%"/>
+<img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=7c6af7,a855f7,060b14&height=220&section=header&text=OmitFS&fontSize=90&fontColor=ffffff&animation=twinkling&fontAlignY=40&desc=Intent-Driven%20%E2%80%A2%20Local-First%20%E2%80%A2%20Semantic%20File%20System&descAlignY=62&descSize=17&descColor=c4b5fd" width="100%"/>
 
-<a href="https://git.io/typing-svg"><img src="https://readme-typing-svg.demolab.com?font=Fira+Code&weight=600&size=22&pause=1000&color=7C6AF7&center=true&vCenter=true&multiline=true&repeat=true&width=700&height=60&lines=%24+omitfs+select+%22calculus+assignment%22;%E2%86%92+Math_HW_Chapter4_Final.pdf+%E2%9C%93" alt="Typing SVG" /></a>
+<a href="https://git.io/typing-svg"><img src="https://readme-typing-svg.demolab.com?font=Fira+Code&weight=600&size=22&pause=1000&color=7C6AF7&center=true&vCenter=true&multiline=true&repeat=true&width=700&height=100&lines=%24+omitfs+select+%22calculus+assignment%22;%E2%86%92+Found:+Math_HW_Chapter4_Final.pdf+%E2%9C%93" alt="Typing SVG" /></a>
 
 <br/>
 
@@ -110,35 +110,35 @@ OmitFS is a **production-grade, 100% local** semantic file system written entire
 
 ```mermaid
 graph TD
-    A["📁 Files dropped into raw/"] --> B{OmitFS Daemon}
+    A["Files dropped into raw/"] --> B{OmitFS Daemon}
 
-    B --> C["📄 Text Extraction"]
+    B --> C["Text Extraction"]
     C --> D["PDF via pdf-extract"]
     C --> E["DOCX via docx-rs"]
     C --> F["XLSX/CSV via calamine"]
-    C --> G["🖼 Images → Tesseract OCR"]
-    C --> H["🎙 Audio/Video → Whisper"]
+    C --> G["Images via Tesseract OCR"]
+    C --> H["Audio/Video via Whisper"]
     C --> I["Plain text / Source code"]
 
     D & E & F & G & H & I --> J["Chunker\n200-word overlapping windows"]
 
     J --> K{"SHA-256 Manifest\nSkip unchanged files"}
     K -->|Changed/New| L["EmbeddingEngine\nall-MiniLM-L6-v2\nCPU / CUDA / Metal"]
-    K -->|Unchanged| M["⏭ Skip (instant)"]
+    K -->|Unchanged| M["Skip (instant)"]
 
     L --> N{"AES-256-GCM\nEncryption\n(optional)"}
     N --> O[("LanceDB\nVector Database")]
 
     O --> P{Two-Stage Search}
-    P --> Q["1️⃣ ANN Vector Search\ncosine similarity"]
-    Q --> R["2️⃣ BM25 Re-ranker\nTF-IDF + filename boost"]
-    R --> S["📊 Results"]
+    P --> Q["1. ANN Vector Search\ncosine similarity"]
+    Q --> R["2. BM25 Re-ranker\nTF-IDF + filename boost"]
+    R --> S["Results"]
 
-    S --> T["omitfs select\n🖥 TUI Manager"]
-    S --> U["omitfs ask\n🤖 RAG + Local LLM"]
-    S --> V["omitfs serve\n🌐 Web UI :3030"]
-    S --> W["omitfs mcp\n🔌 AI Agent Protocol"]
-    S --> X["omitfs mount\n📂 FUSE cd-into-query"]
+    S --> T["omitfs select\nTUI Manager"]
+    S --> U["omitfs ask\nRAG + Local LLM"]
+    S --> V["omitfs serve\nWeb UI :3030"]
+    S --> W["omitfs mcp\nAI Agent Protocol"]
+    S --> X["omitfs mount\nFUSE cd-into-query"]
 ```
 
 ---
@@ -147,7 +147,7 @@ graph TD
 
 ```mermaid
 sequenceDiagram
-    participant U as 👤 User
+    participant U as User
     participant CLI as omitfs select
     participant E as EmbeddingEngine
     participant DB as LanceDB
@@ -467,6 +467,6 @@ MIT © 2024 [Panav Payappagoudar](https://github.com/Panav-Payappagoudar)
 
 **If OmitFS saved you time, leave a ⭐ — it means a lot.**
 
-<img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=6,11,20&height=120&section=footer&animation=twinkling" width="100%"/>
+<img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=7c6af7,a855f7,060b14&height=120&section=footer&animation=twinkling" width="100%"/>
 
 </div>
