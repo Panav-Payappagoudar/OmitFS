@@ -181,7 +181,7 @@ async fn handle_search(
         Err(e) => err(id, -32000, &format!("Search failed: {e}")),
         Ok(raw) => {
             let reranked = reranker::rerank(&query, raw);
-            let content: Vec<Value> = reranked.iter().map(|(fname, path)| {
+            let content: Vec<Value> = reranked.iter().map(|(fname, path, _chunk)| {
                 json!({ "filename": fname, "path": path })
             }).collect();
             ok(id, json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&content).unwrap_or_default() }] }))

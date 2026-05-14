@@ -22,10 +22,13 @@ pub fn transcribe(path: &Path) -> Option<String> {
         return None;
     };
 
-    let tmp_dir  = std::env::temp_dir();
-    let stem     = path.file_stem()?.to_string_lossy().to_string();
-    let txt_path = tmp_dir.join(format!("{stem}.txt"));
-    let _ = std::fs::remove_file(&txt_path);
+    let tmp_dir = std::env::temp_dir();
+    let stem    = path.file_stem()?.to_string_lossy().to_string();
+
+    // Whisper always writes `<stem>.txt` into the output directory.
+    // Pre-clean any stale file from a previous (possibly crashed) run.
+    let whisper_out = tmp_dir.join(format!("{stem}.txt"));
+    let _ = std::fs::remove_file(&whisper_out);
 
     let out = std::process::Command::new(cmd)
         .arg(path.as_os_str())
@@ -36,8 +39,9 @@ pub fn transcribe(path: &Path) -> Option<String> {
 
     match out {
         Ok(o) if o.status.success() => {
-            let text = std::fs::read_to_string(&txt_path).unwrap_or_default();
-            let _ = std::fs::remove_file(&txt_path);
+            // Read Whisper's actual output path ({stem}.txt) and remove it.
+            let text = std::fs::read_to_string(&whisper_out).unwrap_or_default();
+            let _ = std::fs::remove_file(&whisper_out);
             if text.trim().is_empty() { None } else { Some(text) }
         }
         Ok(o) => {
@@ -50,3 +54,4 @@ pub fn transcribe(path: &Path) -> Option<String> {
         }
     }
 }
+

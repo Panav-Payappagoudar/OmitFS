@@ -13,13 +13,13 @@
 
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-blue?style=for-the-badge)](https://github.com/Panav-Payappagoudar/OmitFS/releases)
 [![License](https://img.shields.io/badge/License-MIT-7c6af7?style=for-the-badge)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.3.2-a855f7?style=for-the-badge)](https://github.com/Panav-Payappagoudar/OmitFS/releases)
+[![Version](https://img.shields.io/badge/version-0.3.0-a855f7?style=for-the-badge)](https://github.com/Panav-Payappagoudar/OmitFS/releases)
 [![CI](https://img.shields.io/github/actions/workflow/status/Panav-Payappagoudar/OmitFS/release.yml?style=for-the-badge&label=CI%2FCD)](https://github.com/Panav-Payappagoudar/OmitFS/actions)
 
 <br/>
 
-> **Search your files the way you think about them — not by filename.**  
-> *"my calculus assignment from last week"* → finds it instantly.  
+> **Search your files the way you think about them — not by filename.**
+> *"my calculus assignment from last week"* → finds it instantly.
 > **No cloud. No API. No token limits. No compromise. Forever offline.**
 
 </div>
@@ -51,13 +51,13 @@ irm https://raw.githubusercontent.com/Panav-Payappagoudar/OmitFS/main/install.ps
 </tr>
 </table>
 
-> The installer automatically: detects your OS, downloads the pre-built binary, patches your `PATH`, pulls the Ollama `llama3` model, and runs `omitfs init`. One command, fully operational.
+> The installer automatically detects your OS, downloads the pre-built binary, patches your `PATH`, pulls the Ollama `llama3` model, and runs `omitfs init`. One command. Fully operational.
 
 ---
 
 ## 🧠 What is OmitFS?
 
-OmitFS is a **production-grade, 100% local** semantic file system written entirely in Rust. It indexes your files using a locally-running transformer (`all-MiniLM-L6-v2`, ~80 MB) and stores their *meaning* — not just their name — in a local vector database (LanceDB).
+OmitFS is a **production-grade, 100% local** semantic file system written entirely in Rust. It indexes your files using a locally-running transformer (`all-MiniLM-L6-v2`, ~80 MB) and stores their *meaning* — not just their name — in a local vector database ([LanceDB](https://lancedb.github.io/lancedb/)).
 
 <div align="center">
 
@@ -101,8 +101,9 @@ OmitFS is a **production-grade, 100% local** semantic file system written entire
 
 - **No Token Limits** — The embedding model processes unlimited text locally
 - **No API Keys** — Never touches any external service after initial model download
-- **Air-Gapped Ready** — Place model files in `~/.omitfs_data/model/` for fully offline use
+- **Air-Gapped Ready** — Copy model files to `~/.omitfs_data/model/` for fully offline use
 - **AES-256-GCM Encryption** — Optional encryption of all indexed metadata at rest
+- **SHA-256 Manifest** — Incremental indexing; unchanged files are never re-processed
 
 ---
 
@@ -143,7 +144,7 @@ graph TD
 
 ---
 
-## 🔄 Search Pipeline (Sequence Diagram)
+## 🔄 Search Pipeline
 
 ```mermaid
 sequenceDiagram
@@ -170,7 +171,7 @@ sequenceDiagram
 
 ---
 
-## 📂 File Lifecycle (State Diagram)
+## 📂 File Lifecycle
 
 ```mermaid
 stateDiagram-v2
@@ -214,7 +215,7 @@ omitfs daemon &
 # 3. Search semantically — no exact filenames needed
 omitfs select "calculus assignment"
 
-# 4. Or use the beautiful web UI
+# 4. Or use the web UI
 omitfs serve
 # → Open http://localhost:3030
 
@@ -222,7 +223,7 @@ omitfs serve
 omitfs ask "What integral technique did I use in problem 4?"
 ```
 
-### Manual Install (Build From Source)
+### Manual Build From Source
 
 ```bash
 # Requires Rust 1.75+
@@ -236,6 +237,8 @@ cargo build --release --features cuda    # NVIDIA
 cargo build --release --features metal   # Apple Silicon
 ```
 
+> **Reproducible builds:** `Cargo.lock` is committed in this repository. Run `cargo build --release` and you get byte-for-byte the same binary every time.
+
 ---
 
 ## 🛠 Full Command Reference
@@ -244,18 +247,31 @@ cargo build --release --features metal   # Apple Silicon
 
 | Command | Description | Notes |
 |:--------|:-----------|:------|
-| `omitfs init` | Create dirs, download model weights | One-time setup |
-| `omitfs daemon` | Watch `raw/`, auto-index files | Keep running |
+| `omitfs init` | Create dirs, download model weights | One-time setup (~80 MB download) |
+| `omitfs daemon` | Watch `raw/`, auto-index files | Keep running in background |
 | `omitfs reindex` | Force re-embed all files | Ignores SHA manifest |
 | `omitfs select "<query>"` | TUI: search → open/copy/move/delete | Interactive |
-| `omitfs ask "<question>"` | RAG Q&A over your files | Needs Ollama |
-| `omitfs serve [--port N]` | Web UI + REST API | Default: 3030 |
-| `omitfs mcp` | MCP tool server for AI agents | Stdio protocol |
+| `omitfs ask "<question>"` | RAG Q&A over your files | Needs Ollama running |
+| `omitfs serve [--port N]` | Web UI + REST API | Default port: 3030 |
+| `omitfs mcp` | MCP tool server for AI agents | JSON-RPC 2.0 over stdio |
 | `omitfs mount <dir>` | FUSE virtual filesystem | Unix only |
 | `omitfs install-service` | Register daemon as OS service | Auto-start at login |
 | `omitfs uninstall-service` | Remove the OS service | — |
 
 </div>
+
+### `omitfs select` — Interactive TUI Actions
+
+After results appear, you are prompted to choose an action:
+
+| Key | Action |
+|:----|:-------|
+| `o` | Open file with default app / `$EDITOR` |
+| `d` | Delete file (with confirmation) + purge from index |
+| `p` | Print physical path to stdout |
+| `c` | Copy to a destination path |
+| `m` | Move to a destination path |
+| `q` | Quit |
 
 ---
 
@@ -265,13 +281,13 @@ cargo build --release --features metal   # Apple Silicon
 
 | Category | Formats | Engine |
 |:---------|:--------|:-------|
-| 📄 **Documents** | `.pdf` | `pdf-extract` (text layer, no OCR needed) |
+| 📄 **Documents** | `.pdf` | `pdf-extract` (text layer) |
 | 📝 **Word** | `.docx` | `docx-rs` — full paragraph extraction |
-| 📊 **Spreadsheets** | `.xlsx` `.xls` `.ods` `.csv` | `calamine` — all sheets, all cells |
+| 📊 **Spreadsheets** | `.xlsx` `.xls` `.xlsm` `.ods` `.csv` | `calamine` — all sheets, all cells |
 | 💻 **Code & Text** | `.rs` `.py` `.js` `.ts` `.go` `.java` `.cpp` `.md` `.json` `.yaml` `.toml` … | UTF-8 direct read |
-| 🖼️ **Images** *(auto)* | `.jpg` `.png` `.gif` `.bmp` `.tiff` | **Tesseract OCR** (auto-detected) |
-| 🎙️ **Audio/Video** *(auto)* | `.mp3` `.mp4` `.wav` `.mov` `.flac` `.webm` | **Whisper** transcription (auto-detected) |
-| 📦 **Anything else** | `.zip` `.exe` `.psd` … | Filename indexed, content skipped |
+| 🖼️ **Images** *(auto)* | `.jpg` `.png` `.gif` `.bmp` `.tiff` `.webp` | **Tesseract OCR** (auto-detected) |
+| 🎙️ **Audio/Video** *(auto)* | `.mp3` `.mp4` `.wav` `.mov` `.flac` `.ogg` `.webm` | **Whisper** transcription (auto-detected) |
+| 📦 **Anything else** | `.zip` `.exe` `.psd` … | Filename indexed, binary content skipped |
 
 </div>
 
@@ -287,7 +303,7 @@ cargo build --release --features metal   # Apple Silicon
 Question: "What formula did I use in problem 4?"
          │
          ▼
-[1]  Embed question locally         all-MiniLM-L6-v2 → 384-dim vector (5ms)
+[1]  Embed question locally         all-MiniLM-L6-v2 → 384-dim vector (~5ms)
          │
          ▼
 [2]  Retrieve top chunks            LanceDB ANN + BM25 re-ranking
@@ -303,12 +319,40 @@ Question: "What formula did I use in problem 4?"
 ```
 
 ```bash
-# Change the model in config.toml:
-ollama_model = "phi4"      # Microsoft Phi-4 (fast, smart)
-ollama_model = "llama3"    # Meta Llama 3 (default)
-ollama_model = "mistral"   # Mistral 7B
-ollama_model = "deepseek-r1"  # DeepSeek R1 (best reasoning)
+# First, install Ollama and pull a model:
+# https://ollama.com
+ollama pull llama3
+
+# Then ask away:
+omitfs ask "What formula did I use in problem 4?"
+
+# Change the model in ~/.omitfs_data/config.toml:
+# ollama_model = "phi4"        # Microsoft Phi-4 (fast, smart)
+# ollama_model = "llama3"      # Meta Llama 3 (default)
+# ollama_model = "mistral"     # Mistral 7B
+# ollama_model = "deepseek-r1" # DeepSeek R1 (best reasoning)
 ```
+
+---
+
+## 🌐 Web UI — `omitfs serve`
+
+```bash
+omitfs serve              # default port 3030
+omitfs serve --port 8080  # custom port
+```
+
+Open **http://localhost:3030** to get:
+
+- **🔍 Search tab** — real-time semantic search with file type icons and path display
+- **🤖 Ask AI tab** — streaming RAG Q&A powered by your local Ollama model
+
+### REST API
+
+| Method | Endpoint | Description |
+|:-------|:---------|:------------|
+| `GET` | `/api/search?q=<query>[&limit=N]` | Returns `[{ filename, path, snippet }]` |
+| `POST` | `/api/ask` | Body: `{ "question": "...", "model": "..." }` → SSE stream |
 
 ---
 
@@ -349,10 +393,9 @@ OmitFS works as a native tool for Claude Desktop, Cursor, and Continue.
 
 ## 🔒 Encryption at Rest
 
-Enable in one line:
+Enable in one line in `~/.omitfs_data/config.toml`:
 
 ```toml
-# ~/.omitfs_data/config.toml
 encryption_enabled = true
 ```
 
@@ -361,19 +404,19 @@ encryption_enabled = true
 - Encrypts **chunk text** before it is written to LanceDB
 - Your original files in `raw/` are **never modified**
 
-> ⚠️ Back up `encryption.key`. If lost, indexed content is inaccessible (original files remain intact).
+> ⚠️ Back up `encryption.key`. If lost, indexed content becomes inaccessible — original files are always intact.
 
 ---
 
 ## ⚙️ Configuration
 
-```toml
-# ~/.omitfs_data/config.toml (auto-generated on init)
+`~/.omitfs_data/config.toml` — auto-generated with defaults on `omitfs init`:
 
+```toml
 # ── Search ─────────────────────────────────────────
-max_results      = 10     # files returned per query
-overfetch_factor = 5      # ANN over-fetch for BM25 re-ranking
-chunk_words      = 200    # words per embedding chunk
+max_results      = 10     # distinct files returned per query
+overfetch_factor = 5      # ANN over-fetch multiplier for BM25 re-ranking
+chunk_words      = 200    # words per embedding chunk (keep ≤ 350 for BERT safety)
 overlap_words    = 50     # overlap between adjacent chunks
 
 # ── Web UI + RAG ────────────────────────────────────
@@ -382,30 +425,59 @@ ollama_url    = "http://localhost:11434"
 ollama_model  = "llama3"
 
 # ── Security ────────────────────────────────────────
-encryption_enabled = false   # AES-256-GCM chunk encryption
+encryption_enabled = false   # AES-256-GCM chunk encryption (opt-in)
 
 # ── Multi-Modal (degrade gracefully if not installed) ─
 ocr_enabled     = true   # Tesseract image OCR
-whisper_enabled = true   # Whisper audio transcription
+whisper_enabled = true   # Whisper audio/video transcription
 ```
 
 ---
 
 ## 🖥️ Desktop GUI (Tauri)
 
-The `gui/` directory contains a native desktop app:
+The `gui/` directory contains a native desktop app built with Tauri v2:
 
-- **`Ctrl+Space`** — global hotkey to instantly show search anywhere on screen
+- **`Ctrl+Space`** — global hotkey to show/hide the search window from anywhere
 - **System tray** — hide to tray; OmitFS is always one keystroke away
-- **Frameless transparent window** — floats above other apps
-- Hosts the full web UI inside a native WebView
+- **Frameless transparent window** — floats above other apps, always on top
+- **Transparent** — loads the embedded web UI at `http://localhost:3031`
 
 ```bash
 # Prerequisites: Node.js 18+ and Rust
 cd gui
 npm install
-npm run dev     # development
-npm run build   # creates .msi / .dmg / .AppImage
+npm run dev     # development mode
+npm run build   # produces .msi / .dmg / .AppImage
+```
+
+---
+
+## 🗺️ Project Structure
+
+```
+OmitFS/
+├── src/
+│   ├── main.rs              # CLI, daemon loop, orchestration
+│   ├── config.rs            # TOML config (load/save/defaults)
+│   ├── db.rs                # LanceDB wrapper (insert/search/delete)
+│   ├── embedding.rs         # BERT inference via candle (all-MiniLM-L6-v2)
+│   ├── hasher.rs            # SHA-256 manifest (incremental indexing)
+│   ├── reranker.rs          # BM25 re-ranking of ANN results
+│   ├── rag.rs               # RAG pipeline (Ollama streaming)
+│   ├── server.rs            # Axum web server + embedded HTML UI
+│   ├── mcp.rs               # MCP JSON-RPC 2.0 stdio server
+│   ├── crypto.rs            # AES-256-GCM encryption (custom base64)
+│   ├── watcher.rs           # notify filesystem watcher
+│   ├── ocr.rs               # Tesseract OCR wrapper
+│   ├── whisper_transcribe.rs# Whisper CLI wrapper
+│   └── fuse.rs              # FUSE virtual filesystem (Unix only)
+├── gui/
+│   └── src-tauri/           # Tauri v2 desktop application
+├── install.sh               # One-line macOS/Linux installer
+├── install.ps1              # One-line Windows installer
+├── Cargo.toml               # Workspace manifest
+└── Cargo.lock               # Pinned dependency versions (committed)
 ```
 
 ---
@@ -424,7 +496,7 @@ npm run build   # creates .msi / .dmg / .AppImage
 
 </div>
 
-> The SHA-256 manifest means the daemon never re-indexes files that haven't changed. Even with 100,000 files, restarts are instantaneous.
+> The SHA-256 manifest means the daemon never re-indexes files that haven't changed. Even with 100,000 files, daemon restarts are instantaneous.
 
 ---
 
@@ -450,22 +522,29 @@ npm run build   # creates .msi / .dmg / .AppImage
 | One-line installer (macOS/Linux/Windows) | ✅ |
 | Team LAN sync (P2P, no cloud) | 🔄 |
 | Browser extension (web clipper) | 🔄 |
-| Stripe billing + license keys | 🔄 |
-| Enterprise SSO / audit logs | 🔄 |
 
 </div>
 
 ---
 
+## 🤝 Contributing
+
+1. Fork the repo and create a feature branch
+2. Run `cargo check` and `cargo clippy` before submitting
+3. All new modules must have doc comments
+4. Keep the zero-dependency-on-cloud rule: OmitFS must work fully offline after initial model download
+
+---
+
 ## 📜 License
 
-MIT © 2024 [Panav Payappagoudar](https://github.com/Panav-Payappagoudar)
+MIT © 2025 [Panav Payappagoudar](https://github.com/Panav-Payappagoudar)
 
 <div align="center">
 
 <br/>
 
-**If OmitFS saved you time, leave a ⭐ — it means a lot.**
+**If OmitFS saved you time, drop a ⭐ — it means a lot.**
 
 <img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=7c6af7,a855f7,060b14&height=120&section=footer&animation=twinkling" width="100%"/>
 

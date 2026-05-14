@@ -1,6 +1,6 @@
-# Rust
+# Rust build output
 /target
-Cargo.lock
+# Note: Cargo.lock is intentionally committed for binary crates (reproducible builds).
 
 # OmitFS Data (Never commit user data or models)
 .omitfs_data/

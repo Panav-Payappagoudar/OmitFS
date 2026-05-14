@@ -19,10 +19,19 @@ pub fn extract_image_text(path: &Path) -> Option<String> {
         return None;
     }
 
-    // Tesseract appends `.txt` to the output base name automatically
-    let tmp_base = std::env::temp_dir().join("omitfs_ocr_out");
-    let tmp_txt  = std::env::temp_dir().join("omitfs_ocr_out.txt");
-    let _        = std::fs::remove_file(&tmp_txt); // clean stale output
+    // Use a unique temp base per call to avoid race conditions between
+    // concurrent OCR operations (which would overwrite each other's output).
+    // Use process::id() + a counter for stable uniqueness (ThreadId::as_u64 is nightly-only).
+    let unique = format!(
+        "omitfs_ocr_{}_{}",
+        std::process::id(),
+        // Thread ID debug output is stable and unique per thread (e.g. "ThreadId(3)")
+        format!("{:?}", std::thread::current().id())
+            .replace(['(', ')', ' '], "_"),
+    );
+    let tmp_base = std::env::temp_dir().join(&unique);
+    let tmp_txt  = std::env::temp_dir().join(format!("{unique}.txt"));
+    let _        = std::fs::remove_file(&tmp_txt); // clean any stale output
 
     let result = std::process::Command::new("tesseract")
         .arg(path.as_os_str())
