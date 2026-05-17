@@ -14,8 +14,11 @@ use crate::config::Config;
 use crate::db::OmitDb;
 use crate::embedding::EmbeddingEngine;
 
-const TTL: Duration = Duration::from_secs(1);
-const ROOT_INO: u64 = 1;
+const TTL:             Duration = Duration::from_secs(1);
+const ROOT_INO:        u64     = 1;
+/// Max number of materialised virtual directories kept alive simultaneously.
+/// When exceeded, the oldest is evicted along with all its children.
+const MAX_VIRTUAL_DIRS: usize  = 50;
 
 // ─── Internal inode representation ───────────────────────────────────────────
 
@@ -42,6 +45,8 @@ pub struct OmitFs {
     cfg:        Config,
     nodes:      HashMap<u64, Node>,
     next_inode: u64,
+    /// Insertion-order queue of VirtualDir inodes for bounded eviction.
+    dir_lru:    std::collections::VecDeque<u64>,
 }
 
 impl OmitFs {
@@ -61,6 +66,7 @@ impl OmitFs {
             cfg,
             nodes,
             next_inode: 2,
+            dir_lru:    std::collections::VecDeque::new(),
         }
     }
 
@@ -226,6 +232,20 @@ impl Filesystem for OmitFs {
                 }
 
                 self.nodes.insert(dir_ino, Node::VirtualDir { name: name_str, children });
+
+                // ── Evict oldest virtual dir if cap exceeded ──────────────
+                self.dir_lru.push_back(dir_ino);
+                while self.dir_lru.len() > MAX_VIRTUAL_DIRS {
+                    if let Some(old_ino) = self.dir_lru.pop_front() {
+                        if let Some(Node::VirtualDir { children, .. }) =
+                            self.nodes.remove(&old_ino)
+                        {
+                            for (child_ino, _) in children {
+                                self.nodes.remove(&child_ino);
+                            }
+                        }
+                    }
+                }
 
                 match self.build_attr(dir_ino) {
                     Some(attr) => reply.entry(&TTL, &attr, 0),

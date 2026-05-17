@@ -29,16 +29,31 @@ impl EmbeddingEngine {
                 model_dir.join("model.safetensors"),
             )
         } else {
-            let api  = Api::new().context("Failed to init HuggingFace cache API")?;
+            // One-time download from HuggingFace cache.
+            // Files are then copied into model_dir so all future startups
+            // are fully air-gapped and require zero network access.
+            let api  = Api::new().context(
+                "Model not found locally. Run `omitfs init` once with internet access to download it."
+            )?;
             let repo = api.repo(Repo::new(
                 "sentence-transformers/all-MiniLM-L6-v2".to_string(),
                 RepoType::Model,
             ));
-            (
-                repo.get("config.json").context("Fetch config.json")?,
-                repo.get("tokenizer.json").context("Fetch tokenizer.json")?,
-                repo.get("model.safetensors").context("Fetch model.safetensors")?,
-            )
+            let hf_config    = repo.get("config.json").context("Fetch config.json")?;
+            let hf_tokenizer = repo.get("tokenizer.json").context("Fetch tokenizer.json")?;
+            let hf_weights   = repo.get("model.safetensors").context("Fetch model.safetensors")?;
+
+            // Persist into local model_dir for all future offline runs
+            std::fs::create_dir_all(&model_dir).context("create model dir")?;
+            let dst_config    = model_dir.join("config.json");
+            let dst_tokenizer = model_dir.join("tokenizer.json");
+            let dst_weights   = model_dir.join("model.safetensors");
+            std::fs::copy(&hf_config,    &dst_config).context("copy config.json")?;
+            std::fs::copy(&hf_tokenizer, &dst_tokenizer).context("copy tokenizer.json")?;
+            std::fs::copy(&hf_weights,   &dst_weights).context("copy model.safetensors")?;
+            info!("Model saved locally at {:?} — future runs are fully offline", model_dir);
+
+            (dst_config, dst_tokenizer, dst_weights)
         };
 
         let config: Config = serde_json::from_str(

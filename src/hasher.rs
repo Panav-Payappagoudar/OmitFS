@@ -87,3 +87,77 @@ fn sha256_file(path: &Path) -> Result<String> {
     }
     Ok(format!("{:x}", h.finalize()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    fn scratch_dir() -> PathBuf {
+        let p = std::env::temp_dir()
+            .join(format!("omitfs_hasher_test_{}", std::process::id()));
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    #[test]
+    fn test_new_file_is_stale() {
+        let dir  = scratch_dir();
+        let mf   = HashManifest::load(&dir).unwrap();
+        let file = dir.join("hello.txt");
+        std::fs::write(&file, b"hello").unwrap();
+        assert!(mf.is_stale(&file));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_indexed_file_is_not_stale() {
+        let dir  = scratch_dir();
+        let file = dir.join("note.txt");
+        std::fs::write(&file, b"content").unwrap();
+        let mut mf = HashManifest::load(&dir).unwrap();
+        mf.mark_indexed(&file).unwrap();
+        assert!(!mf.is_stale(&file));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_modified_file_is_stale() {
+        let dir  = scratch_dir();
+        let file = dir.join("change.txt");
+        std::fs::write(&file, b"original").unwrap();
+        let mut mf = HashManifest::load(&dir).unwrap();
+        mf.mark_indexed(&file).unwrap();
+        // Overwrite with different content
+        std::fs::write(&file, b"modified content").unwrap();
+        assert!(mf.is_stale(&file));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_save_and_reload() {
+        let dir  = scratch_dir();
+        let file = dir.join("persist.txt");
+        std::fs::write(&file, b"data").unwrap();
+        let mut mf = HashManifest::load(&dir).unwrap();
+        mf.mark_indexed(&file).unwrap();
+        mf.save().unwrap();
+
+        // Reload from disk
+        let mf2 = HashManifest::load(&dir).unwrap();
+        assert!(!mf2.is_stale(&file));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_remove_entry() {
+        let dir  = scratch_dir();
+        let file = dir.join("removeme.txt");
+        std::fs::write(&file, b"data").unwrap();
+        let mut mf = HashManifest::load(&dir).unwrap();
+        mf.mark_indexed(&file).unwrap();
+        mf.remove(&file);
+        assert!(mf.is_stale(&file));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

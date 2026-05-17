@@ -121,3 +121,74 @@ fn base64_decode(s: &str) -> Result<Vec<u8>> {
     }
     Ok(out)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn tmp_dir() -> PathBuf {
+        let p = std::env::temp_dir().join(format!("omitfs_crypto_test_{}", std::process::id()));
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    #[test]
+    fn test_encrypt_decrypt_roundtrip() {
+        let dir = tmp_dir();
+        let enc = Encryptor::load_or_create(&dir).unwrap();
+        let plaintext = "Hello, OmitFS!";
+        let ciphertext = enc.encrypt(plaintext).unwrap();
+        assert_ne!(ciphertext, plaintext);
+        let recovered = enc.decrypt(&ciphertext).unwrap();
+        assert_eq!(recovered, plaintext);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_different_nonces_per_encrypt() {
+        let dir = tmp_dir();
+        let enc = Encryptor::load_or_create(&dir).unwrap();
+        let a = enc.encrypt("same text").unwrap();
+        let b = enc.encrypt("same text").unwrap();
+        // Different nonces → different ciphertexts each time
+        assert_ne!(a, b);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_wrong_key_fails_decrypt() {
+        let dir_a = tmp_dir();
+        let dir_b = std::env::temp_dir()
+            .join(format!("omitfs_crypto_test_b_{}", std::process::id()));
+        std::fs::create_dir_all(&dir_b).unwrap();
+
+        let enc_a = Encryptor::load_or_create(&dir_a).unwrap();
+        let enc_b = Encryptor::load_or_create(&dir_b).unwrap();
+
+        let ct = enc_a.encrypt("secret").unwrap();
+        // Decrypting with a different key must fail
+        assert!(enc_b.decrypt(&ct).is_err());
+
+        let _ = std::fs::remove_dir_all(&dir_a);
+        let _ = std::fs::remove_dir_all(&dir_b);
+    }
+
+    #[test]
+    fn test_base64_roundtrip() {
+        let data: Vec<u8> = (0u8..=255).collect();
+        let encoded = base64_encode(&data);
+        let decoded = base64_decode(&encoded).unwrap();
+        assert_eq!(data, decoded);
+    }
+
+    #[test]
+    fn test_key_length_validation() {
+        let dir = tmp_dir();
+        // Write a key that is the wrong length
+        std::fs::write(dir.join("encryption.key"), b"tooshort").unwrap();
+        let result = Encryptor::load_or_create(&dir);
+        assert!(result.is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

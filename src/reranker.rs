@@ -69,3 +69,56 @@ pub fn rerank(
     scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
     scored.into_iter().map(|(_, f, p, t)| (f, p, t)).collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn r(fname: &str, path: &str, text: &str) -> (String, String, String) {
+        (fname.into(), path.into(), text.into())
+    }
+
+    #[test]
+    fn test_empty_results_passthrough() {
+        assert!(rerank("anything", vec![]).is_empty());
+    }
+
+    #[test]
+    fn test_empty_query_passthrough() {
+        let input = vec![r("a.txt", "/a", "hello world")];
+        let out = rerank("", input.clone());
+        assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn test_relevant_doc_ranks_first() {
+        let results = vec![
+            r("noise.txt",   "/noise",   "completely unrelated content"),
+            r("calculus.pdf","/calc",    "integral calculus derivative theorem"),
+        ];
+        let ranked = rerank("calculus integral", results);
+        assert_eq!(ranked[0].0, "calculus.pdf");
+    }
+
+    #[test]
+    fn test_filename_boost() {
+        // "budget" appears only in the filename of the second doc, not in its text.
+        let results = vec![
+            r("report.txt",  "/r", "budget numbers quarterly figures"),
+            r("budget.xlsx", "/b", "some unrelated text here"),
+        ];
+        let ranked = rerank("budget", results);
+        // The filename match should push budget.xlsx up
+        assert_eq!(ranked[0].0, "budget.xlsx");
+    }
+
+    #[test]
+    fn test_preserves_all_results() {
+        let n = 20;
+        let input: Vec<_> = (0..n)
+            .map(|i| r(&format!("f{i}.txt"), &format!("/{i}"), "generic text"))
+            .collect();
+        let out = rerank("generic", input);
+        assert_eq!(out.len(), n);
+    }
+}

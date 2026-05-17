@@ -185,6 +185,28 @@ fn chunk_text(text: &str, chunk_words: usize, overlap_words: usize) -> Vec<Strin
     chunks
 }
 
+/// Decrypt chunk text in search results when encryption is enabled.
+/// Called after every `search_with_chunks` and before the reranker / RAG prompt
+/// so that the reranker and LLM always see plaintext, never encrypted base64.
+/// Chunks that fail to decrypt are returned as-is (best-effort, no data loss).
+fn decrypt_chunks_if_needed(
+    chunks:   Vec<(String, String, String)>,
+    data_dir: &std::path::Path,
+    cfg:      &Config,
+) -> Vec<(String, String, String)> {
+    if !cfg.encryption_enabled { return chunks; }
+    match crypto::Encryptor::load_or_create(data_dir) {
+        Ok(enc) => chunks.into_iter().map(|(f, p, t)| {
+            let t = enc.decrypt(&t).unwrap_or(t);
+            (f, p, t)
+        }).collect(),
+        Err(e) => {
+            warn!("Encryptor init for decrypt failed: {}", e);
+            chunks
+        }
+    }
+}
+
 // ─── Core ingest (shared by daemon + reindex) ─────────────────────────────────
 
 async fn ingest_file(
@@ -362,11 +384,22 @@ async fn main() -> Result<()> {
             info!("omitfs init");
             std::fs::create_dir_all(&raw_dir).context("create raw dir")?;
             let _db = OmitDb::init(data_dir.join("lancedb")).await?;
-            println!("Downloading SLM weights (one-time ~80 MB)…");
+
+            let model_dir = data_dir.join("model");
+            if model_dir.join("config.json").exists() {
+                println!("✅  Embedding model already cached locally — fully offline.");
+            } else {
+                println!("⬇️   Downloading embedding model (one-time, ~30 MB, needs internet)…");
+                println!("    After this, OmitFS is 100% air-gapped with zero cloud dependency.");
+            }
             EmbeddingEngine::new(&data_dir).context("init embedding engine")?;
-            println!("✅  OmitFS v{} ready at {:?}", env!("CARGO_PKG_VERSION"), data_dir);
-            println!("    Drop files into : {:?}", raw_dir);
-            println!("    Config          : {:?}", data_dir.join("config.toml"));
+
+            println!("\n✅  OmitFS v{} ready at {:?}", env!("CARGO_PKG_VERSION"), data_dir);
+            println!("    Drop files into    : {:?}", raw_dir);
+            println!("    Config             : {:?}", data_dir.join("config.toml"));
+            println!("    Embedding model    : {:?}", data_dir.join("model"));
+            println!("\n    All future runs are fully offline — no internet required.");
+            println!("    Run `omitfs daemon` to start indexing.");
         }
 
         // ── daemon ────────────────────────────────────────────────────────────
@@ -426,24 +459,21 @@ async fn main() -> Result<()> {
             println!("♻️   Re-indexing all files in {:?}…", raw_dir);
             let db     = Arc::new(OmitDb::init(data_dir.join("lancedb")).await?);
             let engine = Arc::new(Mutex::new(EmbeddingEngine::new(&data_dir)?));
+            // Load manifest so ingest_file can mark each file only on success.
+            // This prevents a failed file from being silently skipped on the
+            // next daemon run (the old code marked everything after the loop).
+            let mut manifest = HashManifest::load(&data_dir)?;
             let mut n  = 0usize;
             for entry in std::fs::read_dir(&raw_dir).context("read raw dir")? {
                 if let Ok(e) = entry {
                     let p = e.path();
                     if p.is_file() {
-                        // delete old then re-insert
                         let _ = db.delete_by_path(&p.to_string_lossy()).await;
-                        ingest_file(&p, &data_dir, &db, &engine, &cfg, false, None).await;
+                        ingest_file(&p, &data_dir, &db, &engine, &cfg, false, Some(&mut manifest)).await;
                         n += 1;
                     }
                 }
             }
-            // Reset manifest
-            let mut mf = HashManifest::load(&data_dir)?;
-            for entry in std::fs::read_dir(&raw_dir).context("read raw dir")? {
-                if let Ok(e) = entry { let _ = mf.mark_indexed(&e.path()); }
-            }
-            let _ = mf.save();
             println!("✅  Re-indexed {} files.", n);
         }
 
@@ -480,6 +510,7 @@ async fn main() -> Result<()> {
             println!("\n🔍  Searching: \"{query}\"\n");
             let vector  = engine.embed(&query)?;
             let raw     = db.search_with_chunks(vector, cfg.max_results, cfg.overfetch_factor).await?;
+            let raw     = decrypt_chunks_if_needed(raw, &data_dir, &cfg);
             let results = reranker::rerank(&query, raw);
 
             if results.is_empty() {
@@ -522,8 +553,7 @@ async fn main() -> Result<()> {
                     std::io::stdin().read_line(&mut c)?;
                     if c.trim().eq_ignore_ascii_case("y") {
                         std::fs::remove_file(phys_path).context("delete file")?;
-                        let db2 = OmitDb::init(data_dir.join("lancedb")).await?;
-                        if let Err(e) = db2.delete_by_path(phys_path).await {
+                        if let Err(e) = db.delete_by_path(phys_path).await {
                             warn!("DB purge after delete: {}", e);
                         }
                         println!("Deleted and removed from index.");
@@ -557,6 +587,7 @@ async fn main() -> Result<()> {
             println!("\n🤖  Searching context for: \"{question}\"\n");
             let vector = engine.embed(&question)?;
             let raw    = db.search_with_chunks(vector, cfg.max_results, cfg.overfetch_factor).await?;
+            let raw    = decrypt_chunks_if_needed(raw, &data_dir, &cfg);
             let chunks = reranker::rerank(&question, raw);
 
             if chunks.is_empty() {
@@ -577,7 +608,7 @@ async fn main() -> Result<()> {
             let port   = port.unwrap_or(cfg.serve_port);
             let db     = Arc::new(OmitDb::init(data_dir.join("lancedb")).await?);
             let engine = Arc::new(Mutex::new(EmbeddingEngine::new(&data_dir)?));
-            let state  = server::AppState { db, engine, cfg: Arc::new(cfg) };
+            let state  = server::AppState { db, engine, cfg: Arc::new(cfg), data_dir: data_dir.clone() };
             let app    = server::build_router(state);
             let addr: SocketAddr = format!("127.0.0.1:{port}").parse().context("Invalid address")?;
             println!("🌐  OmitFS web UI → http://localhost:{port}");
@@ -590,7 +621,7 @@ async fn main() -> Result<()> {
         Commands::Mcp => {
             let db     = Arc::new(OmitDb::init(data_dir.join("lancedb")).await?);
             let engine = Arc::new(Mutex::new(EmbeddingEngine::new(&data_dir)?));
-            mcp::run_mcp_server(db, engine, Arc::new(cfg)).await?;
+            mcp::run_mcp_server(db, engine, Arc::new(cfg), data_dir.clone()).await?;
         }
 
         // ── install-service ───────────────────────────────────────────────────

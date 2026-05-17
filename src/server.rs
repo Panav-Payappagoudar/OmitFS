@@ -19,11 +19,13 @@ use axum::{
 use axum::response::sse::Event as SseEvent;
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::error;
 
 use crate::config::Config;
+use crate::crypto;
 use crate::db::OmitDb;
 use crate::embedding::EmbeddingEngine;
 use crate::reranker;
@@ -32,9 +34,29 @@ use crate::reranker;
 
 #[derive(Clone)]
 pub struct AppState {
-    pub db:     Arc<OmitDb>,
-    pub engine: Arc<std::sync::Mutex<EmbeddingEngine>>,
-    pub cfg:    Arc<Config>,
+    pub db:       Arc<OmitDb>,
+    pub engine:   Arc<std::sync::Mutex<EmbeddingEngine>>,
+    pub cfg:      Arc<Config>,
+    pub data_dir: PathBuf,
+}
+
+/// Decrypt chunk text in search results when encryption is enabled.
+/// Chunks that fail to decrypt are passed through as-is to avoid losing results.
+fn decrypt_chunks_if_needed(
+    chunks:   Vec<(String, String, String)>,
+    state:    &AppState,
+) -> Vec<(String, String, String)> {
+    if !state.cfg.encryption_enabled { return chunks; }
+    match crypto::Encryptor::load_or_create(&state.data_dir) {
+        Ok(enc) => chunks.into_iter().map(|(f, p, t)| {
+            let t = enc.decrypt(&t).unwrap_or(t);
+            (f, p, t)
+        }).collect(),
+        Err(e) => {
+            error!("Encryptor init for decrypt failed: {}", e);
+            chunks
+        }
+    }
 }
 
 // ─── Request / Response types ─────────────────────────────────────────────────
@@ -92,6 +114,7 @@ async fn handle_search(
     match state.db.search_with_chunks(vector, limit, state.cfg.overfetch_factor).await {
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
         Ok(raw) => {
+            let raw      = decrypt_chunks_if_needed(raw, &state);
             let reranked = reranker::rerank(&params.q, raw);
             let results: Vec<SearchResult> = reranked.into_iter()
                 .map(|(filename, path, snippet)| SearchResult { filename, path, snippet })
@@ -123,7 +146,7 @@ async fn handle_ask(
 
     // Fetch context chunks
     let chunks = match state.db.search_with_chunks(vector, state.cfg.max_results, state.cfg.overfetch_factor).await {
-        Ok(c)  => c,
+        Ok(c)  => decrypt_chunks_if_needed(c, &state),
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
 
@@ -192,10 +215,11 @@ const UI_HTML: &str = r#"<!DOCTYPE html>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>OmitFS — Semantic File Search</title>
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+  /* System-font stack — no CDN, no internet, fully air-gapped.
+     Renders as Inter on Windows 11, SF Pro on macOS, Cantarell on GNOME. */
   :root{--bg:#0a0a0f;--surface:#12121a;--card:#1a1a28;--border:#2a2a3d;--accent:#7c6af7;--accent2:#a855f7;--text:#e8e8f0;--muted:#6b6b8a;--green:#22c55e;--red:#ef4444}
   *{box-sizing:border-box;margin:0;padding:0}
-  body{background:var(--bg);color:var(--text);font-family:'Inter',sans-serif;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:2rem 1rem}
+  body{background:var(--bg);color:var(--text);font-family:'Segoe UI','SF Pro Display',-apple-system,BlinkMacSystemFont,system-ui,sans-serif;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:2rem 1rem}
   h1{font-size:2.2rem;font-weight:700;background:linear-gradient(135deg,var(--accent),var(--accent2));-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:.3rem}
   .sub{color:var(--muted);font-size:.9rem;margin-bottom:2.5rem}
   .search-wrap{width:100%;max-width:720px;position:relative;margin-bottom:1.5rem}

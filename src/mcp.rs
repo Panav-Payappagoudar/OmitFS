@@ -9,11 +9,13 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tracing::error;
 
 use crate::config::Config;
+use crate::crypto;
 use crate::db::OmitDb;
 use crate::embedding::EmbeddingEngine;
 use crate::reranker;
@@ -87,15 +89,15 @@ fn tools_list() -> Value {
 // ─── Server loop ──────────────────────────────────────────────────────────────
 
 pub async fn run_mcp_server(
-    db:     Arc<OmitDb>,
-    engine: Arc<std::sync::Mutex<EmbeddingEngine>>,
-    cfg:    Arc<Config>,
+    db:       Arc<OmitDb>,
+    engine:   Arc<std::sync::Mutex<EmbeddingEngine>>,
+    cfg:      Arc<Config>,
+    data_dir: PathBuf,
 ) -> Result<()> {
     let stdin  = tokio::io::stdin();
     let mut reader = BufReader::new(stdin).lines();
     let mut stdout = tokio::io::stdout();
 
-    // Announce server info on stderr (agents read stdout only)
     eprintln!("OmitFS MCP server ready (JSON-RPC 2.0 over stdio)");
 
     while let Ok(Some(line)) = reader.next_line().await {
@@ -103,8 +105,8 @@ pub async fn run_mcp_server(
         if line.is_empty() { continue; }
 
         let response = match serde_json::from_str::<RpcRequest>(&line) {
-            Err(e) => err(Value::Null, -32700, &format!("Parse error: {e}")),
-            Ok(req) => handle(&req, &db, &engine, &cfg).await,
+            Err(e)  => err(Value::Null, -32700, &format!("Parse error: {e}")),
+            Ok(req) => handle(&req, &db, &engine, &cfg, &data_dir).await,
         };
 
         let mut out = serde_json::to_string(&response).unwrap_or_default();
@@ -119,13 +121,13 @@ pub async fn run_mcp_server(
 // ─── Method dispatcher ────────────────────────────────────────────────────────
 
 async fn handle(
-    req:    &RpcRequest,
-    db:     &OmitDb,
-    engine: &Arc<std::sync::Mutex<EmbeddingEngine>>,
-    cfg:    &Config,
+    req:      &RpcRequest,
+    db:       &OmitDb,
+    engine:   &Arc<std::sync::Mutex<EmbeddingEngine>>,
+    cfg:      &Config,
+    data_dir: &PathBuf,
 ) -> RpcResponse {
     match req.method.as_str() {
-        // MCP handshake
         "initialize" => ok(req.id.clone(), json!({
             "protocolVersion": "2024-11-05",
             "capabilities": { "tools": {} },
@@ -139,26 +141,47 @@ async fn handle(
             let args = req.params.get("arguments").cloned().unwrap_or(json!({}));
 
             match name {
-                "search" => handle_search(req.id.clone(), &args, db, engine, cfg).await,
-                "ask"    => handle_ask(req.id.clone(), &args, db, engine, cfg).await,
+                "search" => handle_search(req.id.clone(), &args, db, engine, cfg, data_dir).await,
+                "ask"    => handle_ask(req.id.clone(), &args, db, engine, cfg, data_dir).await,
                 other    => err(req.id.clone(), -32601, &format!("Unknown tool: {other}")),
             }
         }
 
-        "notifications/initialized" => ok(req.id.clone(), json!(null)),
+        // MCP spec: notifications must NOT receive a response
+        "notifications/initialized" => return ok(req.id.clone(), json!(null)),
 
         other => err(req.id.clone(), -32601, &format!("Method not found: {other}")),
+    }
+}
+
+/// Decrypt chunk text when encryption is enabled.
+fn decrypt_chunks_if_needed(
+    chunks:   Vec<(String, String, String)>,
+    cfg:      &Config,
+    data_dir: &PathBuf,
+) -> Vec<(String, String, String)> {
+    if !cfg.encryption_enabled { return chunks; }
+    match crypto::Encryptor::load_or_create(data_dir) {
+        Ok(enc) => chunks.into_iter().map(|(f, p, t)| {
+            let t = enc.decrypt(&t).unwrap_or(t);
+            (f, p, t)
+        }).collect(),
+        Err(e) => {
+            error!("MCP: encryptor init for decrypt failed: {}", e);
+            chunks
+        }
     }
 }
 
 // ─── Tool implementations ─────────────────────────────────────────────────────
 
 async fn handle_search(
-    id:     Value,
-    args:   &Value,
-    db:     &OmitDb,
-    engine: &Arc<std::sync::Mutex<EmbeddingEngine>>,
-    cfg:    &Config,
+    id:       Value,
+    args:     &Value,
+    db:       &OmitDb,
+    engine:   &Arc<std::sync::Mutex<EmbeddingEngine>>,
+    cfg:      &Config,
+    data_dir: &PathBuf,
 ) -> RpcResponse {
     let query = match args.get("query").and_then(|v| v.as_str()) {
         Some(q) => q.to_string(),
@@ -178,8 +201,9 @@ async fn handle_search(
     };
 
     match db.search_with_chunks(vector, limit, cfg.overfetch_factor).await {
-        Err(e) => err(id, -32000, &format!("Search failed: {e}")),
+        Err(e)  => err(id, -32000, &format!("Search failed: {e}")),
         Ok(raw) => {
+            let raw      = decrypt_chunks_if_needed(raw, cfg, data_dir);
             let reranked = reranker::rerank(&query, raw);
             let content: Vec<Value> = reranked.iter().map(|(fname, path, _chunk)| {
                 json!({ "filename": fname, "path": path })
@@ -190,11 +214,12 @@ async fn handle_search(
 }
 
 async fn handle_ask(
-    id:     Value,
-    args:   &Value,
-    db:     &OmitDb,
-    engine: &Arc<std::sync::Mutex<EmbeddingEngine>>,
-    cfg:    &Config,
+    id:       Value,
+    args:     &Value,
+    db:       &OmitDb,
+    engine:   &Arc<std::sync::Mutex<EmbeddingEngine>>,
+    cfg:      &Config,
+    data_dir: &PathBuf,
 ) -> RpcResponse {
     let question = match args.get("question").and_then(|v| v.as_str()) {
         Some(q) => q.to_string(),
@@ -217,7 +242,7 @@ async fn handle_ask(
     };
 
     let chunks = match db.search_with_chunks(vector, cfg.max_results, cfg.overfetch_factor).await {
-        Ok(c)  => c,
+        Ok(c)  => decrypt_chunks_if_needed(c, cfg, data_dir),
         Err(e) => return err(id, -32000, &format!("Search failed: {e}")),
     };
 

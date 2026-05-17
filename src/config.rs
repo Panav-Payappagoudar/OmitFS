@@ -100,3 +100,51 @@ impl Config {
         data_dir.join("config.toml")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch_dir() -> PathBuf {
+        let p = std::env::temp_dir()
+            .join(format!("omitfs_config_test_{}", std::process::id()));
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    #[test]
+    fn test_defaults_on_missing_file() {
+        let dir = scratch_dir();
+        let cfg = Config::load(&dir).unwrap();
+        assert_eq!(cfg.max_results,      10);
+        assert_eq!(cfg.overfetch_factor, 5);
+        assert_eq!(cfg.chunk_words,      200);
+        assert_eq!(cfg.serve_port,       3030);
+        assert!(!cfg.encryption_enabled);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_save_and_reload_roundtrip() {
+        let dir = scratch_dir();
+        let mut cfg = Config::default();
+        cfg.max_results        = 42;
+        cfg.encryption_enabled = true;
+        cfg.ollama_model       = "mistral".into();
+        cfg.save(&dir).unwrap();
+
+        let loaded = Config::load(&dir).unwrap();
+        assert_eq!(loaded.max_results,        42);
+        assert!(loaded.encryption_enabled);
+        assert_eq!(loaded.ollama_model,        "mistral");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_corrupt_toml_returns_error() {
+        let dir = scratch_dir();
+        std::fs::write(dir.join("config.toml"), b"[[not_valid_toml").unwrap();
+        assert!(Config::load(&dir).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
