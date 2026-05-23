@@ -1,18 +1,24 @@
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::Path;
 use tokio::sync::mpsc::Sender;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 /// Spawn a native OS filesystem watcher on `raw_dir`.
 /// All events are forwarded through the provided tokio mpsc sender.
+/// Uses `try_send` so the notify callback never blocks or panics;
+/// events are dropped with a warning if the channel is full.
 pub fn start_watcher(
     raw_dir: &Path,
     tx: Sender<Event>,
 ) -> anyhow::Result<RecommendedWatcher> {
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
         match res {
-            Ok(event)  => { let _ = tx.blocking_send(event); }
-            Err(e)     => error!("watcher error: {}", e),
+            Ok(event) => {
+                if let Err(e) = tx.try_send(event) {
+                    warn!("watcher event channel full — event dropped: {e}");
+                }
+            }
+            Err(e) => error!("watcher error: {}", e),
         }
     })?;
 

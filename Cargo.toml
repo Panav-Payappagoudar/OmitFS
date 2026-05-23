@@ -75,3 +75,11 @@ tokio = { version = "1", features = ["full"] }
 [target.'cfg(unix)'.dependencies]
 fuser = "0.14"
 libc  = "0.2"
+
+# ─── Release profile ──────────────────────────────────────────────────────────
+[profile.release]
+opt-level     = 3
+lto           = "thin"      # Link-time optimisation (thin for fast CI builds)
+codegen-units = 1           # Maximise optimisation at cost of compile time
+strip         = "symbols"   # Strip debug symbols → smaller binary
+panic         = "abort"     # No unwinding in release → smaller + faster

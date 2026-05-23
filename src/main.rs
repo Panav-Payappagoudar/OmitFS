@@ -292,16 +292,18 @@ async fn ingest_file(
 
 // ─── OS service helpers ───────────────────────────────────────────────────────
 
+#[allow(unused_variables)]
 fn install_service(exe: &str) -> Result<()> {
     #[cfg(target_os = "windows")]
     {
-        let xml = format!(r#"<?xml version="1.0" encoding="UTF-16"?>
+        let xml = format!(r#"<?xml version="1.0" encoding="UTF-8"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <Triggers><LogonTrigger><Enabled>true</Enabled></LogonTrigger></Triggers>
   <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
     <ExecutionTimeLimit>PT0S</ExecutionTimeLimit></Settings>
   <Actions><Exec><Command>{exe}</Command><Arguments>daemon</Arguments></Exec></Actions>
 </Task>"#);
+        // Write as UTF-8; schtasks accepts UTF-8 XML fine.
         let xml_path = std::env::temp_dir().join("omitfs_task.xml");
         std::fs::write(&xml_path, xml.as_bytes())?;
         let ok = std::process::Command::new("schtasks")
@@ -334,8 +336,6 @@ fn install_service(exe: &str) -> Result<()> {
         std::process::Command::new("systemctl").args(["--user","enable","--now","omitfs.service"]).status()?;
         println!("✅  Registered systemd user service (omitfs.service).");
     }
-    #[allow(unused_variables)]
-    let _ = exe;
     Ok(())
 }
 
@@ -637,4 +637,98 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+// ─── Unit tests ───────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── chunk_text ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_chunk_text_empty() {
+        assert!(chunk_text("", 200, 50).is_empty());
+        assert!(chunk_text("   ", 200, 50).is_empty());
+    }
+
+    #[test]
+    fn test_chunk_text_single_chunk() {
+        let words = "hello world foo bar".to_string();
+        let chunks = chunk_text(&words, 200, 50);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0], words);
+    }
+
+    #[test]
+    fn test_chunk_text_no_empty_chunks() {
+        let text = (0..500).map(|i| format!("word{i}")).collect::<Vec<_>>().join(" ");
+        let chunks = chunk_text(&text, 100, 20);
+        for chunk in &chunks {
+            assert!(!chunk.trim().is_empty(), "chunk_text must never produce empty chunks");
+        }
+    }
+
+    #[test]
+    fn test_chunk_text_overlap() {
+        // 10 words, chunk=6, overlap=2 → step=4
+        // i=0 → end=6, push [a b c d e f], continue
+        // i=4 → end=10 == words.len() → push [e f g h i j], BREAK (early exit)
+        // Result: exactly 2 chunks
+        let words = "a b c d e f g h i j";
+        let chunks = chunk_text(words, 6, 2);
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0], "a b c d e f");
+        assert_eq!(chunks[1], "e f g h i j");
+    }
+
+    #[test]
+    fn test_chunk_text_overlap_clamp_step_to_one() {
+        // overlap >= chunk_words → step becomes 1 (no infinite loop)
+        let words = "a b c d e";
+        let chunks = chunk_text(words, 2, 10); // overlap > chunk_words
+        assert!(!chunks.is_empty());
+    }
+
+    // ── decrypt_chunks_if_needed ────────────────────────────────────────────
+
+    #[test]
+    fn test_decrypt_passthrough_when_disabled() {
+        let mut cfg = Config::default();
+        cfg.encryption_enabled = false;
+
+        let data_dir = std::env::temp_dir().join(format!("omitfs_main_test_{}", std::process::id()));
+        std::fs::create_dir_all(&data_dir).unwrap();
+
+        let chunks = vec![
+            ("file.txt".to_string(), "/path".to_string(), "plaintext".to_string()),
+        ];
+        let out = decrypt_chunks_if_needed(chunks.clone(), &data_dir, &cfg);
+        assert_eq!(out, chunks);
+
+        let _ = std::fs::remove_dir_all(&data_dir);
+    }
+
+    #[test]
+    fn test_decrypt_roundtrip_when_enabled() {
+        let mut cfg = Config::default();
+        cfg.encryption_enabled = true;
+
+        let data_dir = std::env::temp_dir().join(format!("omitfs_main_test_enc_{}", std::process::id()));
+        std::fs::create_dir_all(&data_dir).unwrap();
+
+        // Encrypt a chunk manually
+        let enc = crate::crypto::Encryptor::load_or_create(&data_dir).unwrap();
+        let plaintext = "sensitive chunk data";
+        let ciphertext = enc.encrypt(plaintext).unwrap();
+
+        let chunks = vec![
+            ("file.txt".to_string(), "/path".to_string(), ciphertext),
+        ];
+        let out = decrypt_chunks_if_needed(chunks, &data_dir, &cfg);
+        assert_eq!(out[0].2, plaintext);
+
+        let _ = std::fs::remove_dir_all(&data_dir);
+    }
 }

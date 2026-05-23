@@ -104,15 +104,18 @@ pub async fn run_mcp_server(
         let line = line.trim().to_string();
         if line.is_empty() { continue; }
 
-        let response = match serde_json::from_str::<RpcRequest>(&line) {
-            Err(e)  => err(Value::Null, -32700, &format!("Parse error: {e}")),
+        let maybe_response = match serde_json::from_str::<RpcRequest>(&line) {
+            Err(e)  => Some(err(Value::Null, -32700, &format!("Parse error: {e}"))),
             Ok(req) => handle(&req, &db, &engine, &cfg, &data_dir).await,
         };
 
-        let mut out = serde_json::to_string(&response).unwrap_or_default();
-        out.push('\n');
-        stdout.write_all(out.as_bytes()).await?;
-        stdout.flush().await?;
+        // Notifications return None and must not receive a response
+        if let Some(response) = maybe_response {
+            let mut out = serde_json::to_string(&response).unwrap_or_default();
+            out.push('\n');
+            stdout.write_all(out.as_bytes()).await?;
+            stdout.flush().await?;
+        }
     }
 
     Ok(())
@@ -120,14 +123,15 @@ pub async fn run_mcp_server(
 
 // ─── Method dispatcher ────────────────────────────────────────────────────────
 
+// Return type is Option so notifications (which must NOT get a response) can return None.
 async fn handle(
     req:      &RpcRequest,
     db:       &OmitDb,
     engine:   &Arc<std::sync::Mutex<EmbeddingEngine>>,
     cfg:      &Config,
     data_dir: &PathBuf,
-) -> RpcResponse {
-    match req.method.as_str() {
+) -> Option<RpcResponse> {
+    let resp = match req.method.as_str() {
         "initialize" => ok(req.id.clone(), json!({
             "protocolVersion": "2024-11-05",
             "capabilities": { "tools": {} },
@@ -147,11 +151,12 @@ async fn handle(
             }
         }
 
-        // MCP spec: notifications must NOT receive a response
-        "notifications/initialized" => return ok(req.id.clone(), json!(null)),
+        // MCP spec §4.1: notification messages MUST NOT receive a response.
+        m if m.starts_with("notifications/") => return None,
 
         other => err(req.id.clone(), -32601, &format!("Method not found: {other}")),
-    }
+    };
+    Some(resp)
 }
 
 /// Decrypt chunk text when encryption is enabled.

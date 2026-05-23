@@ -273,6 +273,12 @@ const UI_HTML: &str = r#"<!DOCTYPE html>
 <script>
 const extIcon = e => ({'pdf':'📄','docx':'📝','doc':'📝','xlsx':'📊','xls':'📊','csv':'📊','mp3':'🎵','mp4':'🎬','mov':'🎬','png':'🖼','jpg':'🖼','jpeg':'🖼','zip':'📦','rs':'🦀','py':'🐍','js':'🟨','ts':'🔷','html':'🌐','md':'📋','txt':'📃'}[e] || '📁');
 
+function esc(s) {
+  const d = document.createElement('div');
+  d.appendChild(document.createTextNode(String(s)));
+  return d.innerHTML;
+}
+
 let timer;
 document.getElementById('q').addEventListener('input', () => {
   clearTimeout(timer);
@@ -285,27 +291,28 @@ document.getElementById('q').addEventListener('input', () => {
 async function search(q) {
   try {
     const r = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
+    if (!r.ok) throw new Error(`Server error ${r.status}`);
     const data = await r.json();
     const box = document.getElementById('results');
     if (!data.length) { box.innerHTML='<p class="empty">No files matched. Drop files into ~/.omitfs_data/raw/ and run the daemon.</p>'; return; }
     box.innerHTML = data.map(f => {
       const ext = f.filename.split('.').pop().toLowerCase();
-      return `<div class="card" onclick="copyPath('${f.path.replace(/'/g,"\\'")}')">
+      return `<div class="card" onclick="copyPath(this, ${JSON.stringify(f.path)})">
         <div class="file-icon">${extIcon(ext)}</div>
         <div class="file-info">
-          <div class="file-name">${f.filename}</div>
-          <div class="file-path">${f.path}</div>
-          <div class="snippet">${f.snippet}</div>
+          <div class="file-name">${esc(f.filename)}</div>
+          <div class="file-path">${esc(f.path)}</div>
+          <div class="snippet">${esc(f.snippet)}</div>
         </div>
       </div>`;
     }).join('');
   } catch(e) { document.getElementById('results').innerHTML=`<p class="empty">Error: ${e.message}</p>`; }
 }
 
-function copyPath(p) {
+function copyPath(el, p) {
   navigator.clipboard.writeText(p).then(() => {
-    const el = [...document.querySelectorAll('.card')].find(c => c.innerHTML.includes(p.replace(/'/g,"\\'")));
-    if(el){el.style.borderColor='var(--green)';setTimeout(()=>el.style.borderColor='',1000);}
+    el.style.borderColor='var(--green)';
+    setTimeout(()=>el.style.borderColor='',1000);
   });
 }
 
@@ -331,9 +338,10 @@ async function doAsk() {
       const {done, value} = await reader.read();
       if(done) break;
       const text = dec.decode(value);
-      // SSE: parse data: lines
+      // SSE spec: data lines start with "data: " (with a space)
       text.split('\n').forEach(line => {
-        if(line.startsWith('data:')) box.textContent += line.slice(5);
+        if(line.startsWith('data: ')) box.textContent += line.slice(6);
+        else if(line.startsWith('data:')) box.textContent += line.slice(5);
       });
     }
     status.textContent = 'Done.';
